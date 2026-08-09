@@ -40,6 +40,12 @@ that tile alone rather than the whole wall.
 
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
+A wall is meant to be left open, so a tile that stops is brought back rather
+than left frozen: five attempts with a growing delay, and the error stays on
+screen only once they are spent. Access tokens are refreshed before every
+stream request — Home Assistant's expires after about half an hour, and a wall
+left open overnight answers 401 the moment it reconnects with the old one.
+
 ## Playback methods
 
 Switchable inside the viewer, with a technical line under the picture.

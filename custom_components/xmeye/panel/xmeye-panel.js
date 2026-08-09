@@ -35,6 +35,11 @@ const LAYOUTS = [
   { id: 16, label: "4×4", columns: 4, rows: 4 },
 ];
 
+//: How hard to try to bring a wall tile back before leaving the error on
+//: screen, and the base delay between attempts.
+const WALL_RETRIES = 5;
+const WALL_RETRY_DELAY = 5000;
+
 //: Stream choices offered per tile on the wall.
 const WALL_STREAMS = [
   ["sub", "Дод."],
@@ -147,8 +152,10 @@ class XmeyePanel extends HTMLElement {
     //: Experiment modes for the native player. They narrow down a failure by
     //: halving the search space instead of guessing again.
     this._lab = { keyOnly: false, noPaint: false };
-    //: Wall players on the overview, one per channel.
+    //: Wall players on the overview, one per channel, and how many times each
+    //: has been brought back after a failure.
     this._wall = new Map();
+    this._wallRetries = new Map();
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -198,6 +205,29 @@ class XmeyePanel extends HTMLElement {
 
   async _ws(message) {
     return this._hass.callWS(message);
+  }
+
+  /**
+   * A token that is still valid.
+   *
+   * Home Assistant's access token expires after about half an hour, and
+   * `hass.auth.accessToken` keeps handing out the expired one. A stream started
+   * with it is answered with 401 — which is what a wall left open overnight
+   * shows the moment it tries to reconnect.
+   */
+  async _token() {
+    const auth = this._hass.auth;
+    try {
+      if (auth && auth.expired && typeof auth.refreshAccessToken === "function") {
+        await auth.refreshAccessToken();
+        this._noteDiag("токен оновлено");
+      }
+    } catch (err) {
+      // Not fatal on its own: the stale token may still be accepted, and the
+      // request will say so plainly if it is not.
+      this._noteDiag("не вдалося оновити токен", String(err.message || err));
+    }
+    return auth && auth.accessToken;
   }
 
   async _bootstrap() {
@@ -417,7 +447,7 @@ class XmeyePanel extends HTMLElement {
       const url =
         `/api/xmeye/native/${this._entryId}/${this._live}` +
         `?stream=${this._liveStream}`;
-      player.start(url, this._hass.auth.accessToken).catch((err) => {
+      player.start(url, await this._token()).catch((err) => {
         this._osd = { player: "native", error: String(err.message || err) };
         this._updateOsd();
       });
@@ -895,9 +925,34 @@ class XmeyePanel extends HTMLElement {
     player
       .start(
         `/api/xmeye/native/${this._entryId}/${index}?stream=${this._wallStream(index)}`,
-        this._hass.auth.accessToken
+        await this._token()
       )
-      .catch((err) => this._updateWallCell(index, { error: String(err.message || err) }));
+      .catch((err) => this._failWallTile(index, err));
+  }
+
+  /**
+   * A tile that stopped is brought back rather than left dead.
+   *
+   * A wall is meant to be left open, and over hours a connection does drop —
+   * the recorder recycles it, the network blinks, a token expires. Without this
+   * the tile simply stays frozen until someone reloads the page.
+   */
+  _failWallTile(index, err) {
+    const message = String((err && err.message) || err);
+    const attempt = (this._wallRetries.get(index) || 0) + 1;
+    this._wallRetries.set(index, attempt);
+
+    if (attempt > WALL_RETRIES) {
+      this._updateWallCell(index, { error: message });
+      return;
+    }
+    // Back off a little each time, so a recorder that is genuinely out of
+    // connections is not hammered.
+    const delay = WALL_RETRY_DELAY * attempt;
+    this._updateWallCell(index, { error: `${message} · спроба ${attempt} через ${delay / 1000}с` });
+    setTimeout(() => {
+      if (this._tab === "overview" && this._live === null) this._restartWallTile(index);
+    }, delay);
   }
 
   async _restartWallTile(index) {
@@ -917,9 +972,11 @@ class XmeyePanel extends HTMLElement {
   _stopWall() {
     this._wall.forEach((player) => player.stop());
     this._wall.clear();
+    this._wallRetries.clear();
   }
 
   _updateWallCell(index, stats) {
+    if (stats.fps) this._wallRetries.delete(index);
     const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
     if (!foot) return;
     if (stats.error) {
@@ -1081,7 +1138,7 @@ class XmeyePanel extends HTMLElement {
       shot
         .start(
           `/api/xmeye/playback/${this._entryId}/${this._selectedChannel}?${params}`,
-          this._hass.auth.accessToken
+          await this._token()
         )
         .catch(() => {});
 
@@ -1160,7 +1217,7 @@ class XmeyePanel extends HTMLElement {
     player
       .start(
         `/api/xmeye/playback/${this._entryId}/${this._selectedChannel}?${params}`,
-        this._hass.auth.accessToken
+        await this._token()
       )
       .catch((err) => {
         this._playback.error = String(err.message || err);
