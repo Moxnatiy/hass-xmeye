@@ -1,0 +1,20 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+# HACS reads the version from the manifest, so a release must not disagree
+# with it.
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the tag with the manifest version
+        run: |
+          manifest=$(jq -r .version custom_components/xmeye/manifest.json)
+          tag=${GITHUB_REF_NAME#v}
+          test "$manifest" = "$tag" || {
+            echo "manifest $manifest != tag $tag"; exit 1;
+          }

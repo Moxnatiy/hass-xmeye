@@ -388,6 +388,28 @@ control command, which is still unread.
 
 `tools/probe_playback_value.py` maps the field.
 
+## 12. Optional payload encryption
+
+The device speaks DVRIP in the clear — the login reply says `DataUseAES: false`,
+and this whole client relies on it. The vendor app can *opt into* encrypting a
+connection's payloads through the login handshake; the device does not require
+it. Reverse-engineered from the app's SDK, for reference:
+
+- Payloads become `base64(AES-128-ECB(payload))` with PKCS padding. (A CBC
+  variant exists in the SDK but the control channel used ECB — identical
+  plaintext prefixes produced identical 16-byte ciphertext prefixes.)
+- Keys are derived as `SHA1(SHA1(seed))[:16]`.
+- The handshake is a Diffie-Hellman-style exchange: the client's
+  `OPMonitor Claim` carries `DHParameter.RandomStrA` in the clear, the device
+  replies with `RandomStrB` and a `CommunicateKey`, and the data channel key
+  comes from those.
+
+None of this is needed to talk to the recorder, and the library does not
+implement it. It is documented only because the app's adjustable server-side
+playback speed travels over that encrypted channel — the one piece of archive
+control not reachable in plaintext. The plaintext fast-scan (`Value=2`) covers
+the common case.
+
 ## 10. Prior art
 
 | Project | Language | What it gives |
