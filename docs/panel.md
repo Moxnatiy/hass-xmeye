@@ -94,12 +94,15 @@ smaller stream and then to snapshots rather than showing a black screen.
 Click the timeline to play from that moment. The cursor follows the frame
 currently on screen. There is pause, ±10 s stepping, and speeds from ×1 to ×16.
 
-The recorder feeds the archive strictly at ×1.0 and has no fast-forward
-command — measured. Up to ×4 the player simply runs frames on its own clock.
-From ×4 it switches to seek-based scrubbing: one frame from each point spaced
-by the requested step. Above that only keyframes are decoded, since the screen
-could not change faster anyway. The actual speed is shown next to the requested
-one, because a seek costs what it costs.
+Speed uses one mechanism at every rate: a frame stream paced by the player's own
+clock. Up to ×2 the recorder sends the full stream. At ×4 and above the player
+adds `fast=1`, which asks the recorder to thin the stream itself (OPPlayBack
+`Value=2`) — the only server-side fast-forward the protocol offers, measured at
+roughly sixty times coverage. Those thinned frames are still real and decodable,
+so the same clock paces them to the exact requested rate; the player keeps all
+of them rather than dropping to keyframes, since the recorder already did the
+thinning. The actual speed reached is shown next to the requested one, because
+the recorder's own limits still apply.
 
 ## OSD and diagnostics
 

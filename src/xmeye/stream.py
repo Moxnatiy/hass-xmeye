@@ -211,6 +211,13 @@ class ArchiveStream(_MediaSession):
         self.channel = channel
         #: 0 is the main stream, 1 the sub stream.
         self.stream_index = 0
+        #: OPPlayBack ``Parameter.Value``. The app always sends 0; on the tested
+        #: firmware ``2`` makes the recorder deliver a decimated fast-scan (the
+        #: same frames spread across ~10x more recording time, still decodable),
+        #: which is the only server-side fast-forward the plaintext protocol
+        #: offers. It is a mode selector, not a multiplier: only 2 (weakly 3)
+        #: has an effect. See docs/protocol.md.
+        self.value = 0
 
     def _payload(
         self,
@@ -225,7 +232,7 @@ class ArchiveStream(_MediaSession):
             "PlayMode": "ByTime" if by_time else "ByName",
             "FileName": name,
             "StreamType": self.stream_index,
-            "Value": 0,
+            "Value": self.value,
             "TransMode": "TCP",
         }
         if by_time:

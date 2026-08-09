@@ -177,9 +177,14 @@ class XmeyePlaybackView(HomeAssistantView):
             port=entry.data["port"],
             channel=channel_index,
         )
-        # Scrub speed is bounded by how fast the recorder feeds the archive, and
-        # the protocol has no fast-forward command of its own.
         archive.stream_index = 0 if request.query.get("stream", "main") == "main" else 1
+        # ?fast=1 asks the recorder itself for a decimated fast-scan (Value=2):
+        # the same frames spread across ~10x more recording time. It is the only
+        # server-side fast-forward the protocol offers, and it stays fully
+        # decodable, so the browser can pace it to any rate. Normal playback
+        # leaves Value at 0.
+        if request.query.get("fast") == "1":
+            archive.value = 2
 
         response = web.StreamResponse(
             status=HTTPStatus.OK,

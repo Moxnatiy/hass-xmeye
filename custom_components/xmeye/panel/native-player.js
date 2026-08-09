@@ -208,6 +208,10 @@ export class NativePlayer {
     const settings = options || {};
     //: 0 means live viewing; anything else is the archive playback speed.
     this.rate = settings.rate || 0;
+    //: True when the source is a server-side fast-scan, already thinned to a
+    //: fraction of the frames. Every one of those frames counts, so the
+    //: keyframe-only shortcut used for full streams at high speed must not fire.
+    this.decimated = Boolean(settings.decimated);
     this.paused = false;
     //: Time of the frame currently on screen; the panel tracks its cursor by it.
     this.position = null;
@@ -645,8 +649,9 @@ export class NativePlayer {
           this._mediaStart = item.stamp;
         }
         // At high speed only keyframes are shown: the rest could not reach the
-        // screen anyway, and decoding them only loads the decoder.
-        if (this.rate >= KEYFRAME_ONLY_RATE && !item.keyframe) {
+        // screen anyway, and decoding them only loads the decoder. A fast-scan
+        // is already thinned at the source, so this would leave a slideshow.
+        if (!this.decimated && this.rate >= KEYFRAME_ONLY_RATE && !item.keyframe) {
           this._backlog.shift();
           continue;
         }

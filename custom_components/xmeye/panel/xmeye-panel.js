@@ -57,14 +57,12 @@ const PLAYERS = [
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
 
-//: The speed at which playback switches from smooth to seek-based scrubbing.
-//: The recorder feeds the archive strictly in real time — measured — so there
-//: is simply nothing to spin the stream faster with.
-const SCRUB_RATE = 4;
-
-//: How much time to request per seek, and how long to wait for its frame.
-const SCRUB_WINDOW = 4000;
-const SCRUB_TIMEOUT = 6000;
+//: The speed at and above which playback switches to the recorder's fast-scan.
+//: At normal speeds the archive is played frame-for-frame on the client clock;
+//: from here the recorder itself thins the stream (OPPlayBack Value=2), and the
+//: client still paces it to the exact rate. Below this the full stream is used,
+//: because a thinned stream at 1x-2x would look choppy.
+const FAST_SCAN_RATE = 4;
 
 //: How long to wait for HLS playback to begin before calling it a failure.
 //: Home Assistant needs about thirteen seconds to bring up a stream from this
@@ -1163,68 +1161,21 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
+  /** Whether the current rate is served by the recorder's fast-scan. */
+  _isFastScan() {
+    return this._playback && this._playback.rate >= FAST_SCAN_RATE;
+  }
+
   /**
-   * Fast scrubbing by seeking.
+   * Start playback from a given moment.
    *
-   * The recorder feeds the archive strictly in real time and has no
-   * fast-forward command — measured: both the main and the sub stream run at
-   * exactly 1.0x. So at high speeds playback is not accelerated but stepped:
-   * one frame is taken from points spaced by the desired stride. The result is
-   * what scrubbing is expected to look like, without dragging the whole stream.
+   * One mechanism at every speed: a frame stream paced by the player's own
+   * clock. Below FAST_SCAN_RATE the recorder sends the full stream; at and above
+   * it, `fast=1` asks the recorder to thin the stream itself (OPPlayBack
+   * Value=2), which is the only server-side fast-forward the protocol has. The
+   * thinned frames are still real and decodable, so the same clock paces them to
+   * the exact requested rate and the actual speed reached shows in the OSD.
    */
-  async _scrubLoop() {
-    const { NativePlayer: Player } = await nativeModule;
-    while (this._playback && this._playback.rate >= SCRUB_RATE && !this._playback.paused) {
-      const from = new Date(this._playback.position || this._playback.start);
-      const started = performance.now();
-
-      const canvas = this.shadowRoot.getElementById("playcanvas");
-      if (!canvas) return;
-      const shot = new Player(canvas, () => {}, () => {}, this._diagLog, {});
-      this._archivePlayer = shot;
-      const params = new URLSearchParams({
-        start: toLocalIso(from),
-        end: toLocalIso(new Date(from.getTime() + SCRUB_WINDOW)),
-      });
-      shot
-        .start(
-          `/api/xmeye/playback/${this._entryId}/${this._selectedChannel}?${params}`,
-          await this._token()
-        )
-        .catch(() => {});
-
-      // Wait for the first drawn frame, or give up if this spot is empty.
-      const deadline = performance.now() + SCRUB_TIMEOUT;
-      while (shot.stats.decoded === 0 && performance.now() < deadline) {
-        if (!this._playback || this._playback.rate < SCRUB_RATE) break;
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      shot.stop();
-      if (!this._playback || this._playback.rate < SCRUB_RATE) return;
-
-      const spent = (performance.now() - started) / 1000;
-      const advance = Math.max(this._playback.rate * spent, this._playback.rate);
-      this._playback.position = new Date(from.getTime() + advance * 1000).toISOString();
-      this._playback.actual = advance / spent;
-      this._updateScrubLabels();
-
-      // Reached the end of the day; stop.
-      if (new Date(this._playback.position) >= new Date(this._playback.end)) return;
-    }
-  }
-
-  _updateScrubLabels() {
-    const label = this.shadowRoot.getElementById("playtime");
-    if (label) {
-      label.textContent =
-        fmtClockFull(this._playback.position) +
-        (this._playback.actual ? `  (фактично ×${this._playback.actual.toFixed(1)})` : "");
-    }
-    const cursor = this.shadowRoot.getElementById("cursor");
-    if (cursor) cursor.style.left = `${this._cursorShare()}%`;
-  }
-
-  /** Start playback from a given moment. */
   async _startPlayback(when) {
     this._stopPlayback();
     const day = this._recordingsDay;
@@ -1235,19 +1186,14 @@ class XmeyePanel extends HTMLElement {
       end: end.toISOString(),
       rate: this._playback ? this._playback.rate : 1,
       paused: false,
-      position: null,
+      position: start.toISOString(),
     };
     this._render();
-
-    if (this._playback.rate >= SCRUB_RATE) {
-      this._playback.position = start.toISOString();
-      this._scrubLoop();
-      return;
-    }
 
     const canvas = this.shadowRoot.getElementById("playcanvas");
     if (!canvas) return;
     const { NativePlayer: Player } = await nativeModule;
+    const fast = this._isFastScan();
     const player = new Player(
       canvas,
       (stats) => this._updatePlaybackTime(stats),
@@ -1257,7 +1203,7 @@ class XmeyePanel extends HTMLElement {
       },
       this._diagLog,
       {},
-      { rate: this._playback.rate }
+      { rate: this._playback.rate, decimated: fast }
     );
     this._archivePlayer = player;
 
@@ -1265,6 +1211,7 @@ class XmeyePanel extends HTMLElement {
       start: toLocalIso(start),
       end: toLocalIso(end),
     });
+    if (fast) params.set("fast", "1");
     player
       .start(
         `/api/xmeye/playback/${this._entryId}/${this._selectedChannel}?${params}`,
@@ -1841,12 +1788,14 @@ class XmeyePanel extends HTMLElement {
     root.querySelectorAll(".rate").forEach((button) =>
       button.addEventListener("click", () => {
         const rate = Number(button.dataset.rate);
-        const wasScrub = this._playback.rate >= SCRUB_RATE;
+        const wasFast = this._isFastScan();
         const from = new Date(this._playback.position || this._playback.start);
         this._playback.rate = rate;
         root.querySelectorAll(".rate").forEach((b) => b.classList.toggle("active", b === button));
-        if (wasScrub || rate >= SCRUB_RATE) {
-          // Smooth playback and scrubbing use different mechanisms; restart.
+        // Crossing the full-stream / fast-scan boundary means a different
+        // request, so the stream restarts; staying on the same side only
+        // re-paces the clock.
+        if (wasFast !== this._isFastScan()) {
           this._startPlayback(from);
         } else if (this._archivePlayer) {
           this._archivePlayer.setRate(rate);
