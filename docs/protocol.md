@@ -362,6 +362,32 @@ is built.
 `tools/probe_playback_speed.py` runs the speed measurement with its control
 case; `tools/read_capture.py` reads a pcap of the vendor app.
 
+### Parameter.Value is a hidden fast-scan mode
+
+The app always sent `"Value": 0`. Testing the field directly on the plaintext
+protocol turned up a genuine server-side fast-forward — no encryption needed.
+Measured by frames-per-second-of-recording (near 20 is the full stream, near 2
+is decimated), each value averaged over 25 s:
+
+| Value | fps-of-recording | Effect |
+|---|---|---|
+| 0 | 20.6 | full stream (normal) |
+| 1 | — | returns nothing |
+| **2** | **2.0** | **decimated fast-scan: ~10x fewer frames per recorded second, ~50x coverage, every frame decodable** |
+| 3 | ~9 | mild decimation |
+| 4 | — | returns nothing |
+| 5, 6, 7, 8, 10, 16 | ~20.5 | full stream, same as 0 |
+
+`Value=2` is reproducible across runs (52x, 43x, 55x, 58x on repeats) and is not
+a burst artifact: it delivers the usual number of frames but spread across ten
+to thirteen times more recording time, as short decodable bursts rather than
+keyframes alone. So it is a usable fast-scan, though a single fixed one — `Value`
+is a mode selector, not an adjustable multiplier, and only `2` (and weakly `3`)
+triggers it. The app's smooth, adjustable ×2/×4 lives instead in the encrypted
+control command, which is still unread.
+
+`tools/probe_playback_value.py` maps the field.
+
 ## 10. Prior art
 
 | Project | Language | What it gives |

@@ -81,6 +81,7 @@ All of them read only; none change anything on the device.
 | `tools/dvrip_probe.py` | A dependency-free raw-protocol probe, for when the question is whether the device or the library is at fault |
 | `tools/probe_playback_speed.py` | Tests whether the recorder acts on the archive speed and pause actions, with a control run that sends nothing — without one, the bursty stream makes any action look like it worked |
 | `tools/analyse_service_blocks.py` | Collects the 127-byte service blocks and checks whether their content changes while something moves in view |
+| `tools/probe_playback_value.py` | Maps OPPlayBack `Parameter.Value`; on this firmware `Value=2` is a decodable server-side fast-scan |
 | `tools/read_capture.py` | Reads DVRIP out of a `tcpdump` pcap — the only reliable way to learn the parts of the protocol no document describes |
 | `tools/sync_lib.py` | Syncs the vendored library copy |
 | `tools/ha_restart.sh` | Restarts a development Home Assistant, forcing the port free instead of waiting out the database shutdown |
