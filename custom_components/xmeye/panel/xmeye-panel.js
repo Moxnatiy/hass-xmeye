@@ -2015,11 +2015,12 @@ const STYLES = `
   /* The grip is drawn rather than typed: the braille glyph that reads as a grip
      sits in the upper half of its em box, so it never lines up with the text
      beside it, and how far off depends on the font. Six dots on a 4px grid in a
-     box whose sides are exact multiples of it land dead centre in any font. */
-  .pick-grip { flex:none; width:8px; height:12px; cursor:grab; user-select:none;
+     box whose sides are exact multiples of it land dead centre in any font. The
+     grid is kept small so the grip stays as quiet as the glyph looked. */
+  .pick-grip { flex:none; width:6px; height:9px; cursor:grab; user-select:none;
     color: var(--secondary-text-color);
-    background-image: radial-gradient(currentColor 1px, transparent 1.5px);
-    background-size: 4px 4px; background-position: center; }
+    background-image: radial-gradient(currentColor 0.75px, transparent 1.15px);
+    background-size: 3px 3px; background-position: center; }
   .pick-grip:active { cursor:grabbing; }
   .pick-num { width:15px; text-align:right; color: var(--secondary-text-color);
     font-variant-numeric: tabular-nums; }
