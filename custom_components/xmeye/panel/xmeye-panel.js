@@ -35,6 +35,12 @@ const LAYOUTS = [
   { id: 16, label: "4×4", columns: 4, rows: 4 },
 ];
 
+//: Stream choices offered per tile on the wall.
+const WALL_STREAMS = [
+  ["sub", "Дод."],
+  ["main", "Осн."],
+];
+
 //: Playback methods. Native gives the lowest latency, HLS the best
 //: compatibility, and the snapshot stream always works but is never smooth.
 const PLAYERS = [
@@ -146,9 +152,12 @@ class XmeyePanel extends HTMLElement {
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
-    //: Archive playback state.
+    //: Archive playback state. The player object is deliberately NOT `_player`:
+    //: that field holds the live playback method, and one field serving both
+    //: meanings let `_stopPlayback()` wipe the method and drop the viewer to
+    //: snapshots.
     this._playback = null;
-    this._player = null;
+    this._archivePlayer = null;
     this._recordings = null;
     this._recordingsDay = new Date().toISOString().slice(0, 10);
     this._configTree = null;
@@ -726,6 +735,15 @@ class XmeyePanel extends HTMLElement {
           <span class="pick-num">${channel.index + 1}</span>
           <span class="pick-name" title="${channel.name}">${channel.name}</span>
           <span class="pick-dot ${channel.online ? "online" : ""}"></span>
+          <select class="pick-stream" data-stream="${channel.index}"
+                  title="Потік цієї камери на стіні">
+            ${WALL_STREAMS.map(
+              ([id, label]) =>
+                `<option value="${id}" ${
+                  id === this._wallStream(channel.index) ? "selected" : ""
+                }>${label}</option>`
+            ).join("")}
+          </select>
           <span class="pick-move">
             <button class="ghost" data-move-up="${position}"
                     ${position === 0 ? "disabled" : ""} title="Вище">▴</button>
@@ -759,13 +777,33 @@ class XmeyePanel extends HTMLElement {
       entry: this._entryId,
       order: Array.isArray(stored.order) ? stored.order.map(Number) : [],
       hidden: Array.isArray(stored.hidden) ? stored.hidden.map(Number) : [],
+      //: Per-channel stream choice, keyed by channel index.
+      streams: stored.streams && typeof stored.streams === "object" ? stored.streams : {},
     };
     return this._wallPrefs;
   }
 
   _saveWallPrefs() {
-    const { order, hidden } = this._loadWallPrefs();
-    localStorage.setItem(`xmeye-wall-${this._entryId}`, JSON.stringify({ order, hidden }));
+    const { order, hidden, streams } = this._loadWallPrefs();
+    localStorage.setItem(
+      `xmeye-wall-${this._entryId}`,
+      JSON.stringify({ order, hidden, streams })
+    );
+  }
+
+  /** Which stream a wall tile shows. Sub by default: several 4K tiles at once
+   *  overload both the browser and the recorder. */
+  _wallStream(index) {
+    const chosen = this._loadWallPrefs().streams[index];
+    return chosen === "main" ? "main" : "sub";
+  }
+
+  _setWallStream(index, stream) {
+    this._loadWallPrefs().streams[index] = stream;
+    this._saveWallPrefs();
+    // Only this tile is restarted: a full redraw would reconnect every channel,
+    // and the recorder has about ten connections to give in total.
+    this._restartWallTile(index);
   }
 
   /** Enabled channels in the chosen order; ones the recorder gains join at the end. */
@@ -835,26 +873,45 @@ class XmeyePanel extends HTMLElement {
   /** Start wall players for every enabled channel. */
   async _startWall() {
     this._stopWall();
-    const { NativePlayer: Player, nativePlayerSupported: supported } = await nativeModule;
+    const { nativePlayerSupported: supported } = await nativeModule;
     if (!supported()) return;
 
-    const cells = [...this.shadowRoot.querySelectorAll("canvas[data-wall]")];
-    for (const canvas of cells) {
-      const index = Number(canvas.dataset.wall);
-      const player = new Player(
-        canvas,
-        (stats) => this._updateWallCell(index, stats),
-        () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-        this._diagLog
-      );
-      this._wall.set(index, player);
-      player
-        .start(
-          `/api/xmeye/native/${this._entryId}/${index}?stream=sub`,
-          this._hass.auth.accessToken
-        )
-        .catch((err) => this._updateWallCell(index, { error: String(err.message || err) }));
+    for (const canvas of this.shadowRoot.querySelectorAll("canvas[data-wall]")) {
+      await this._startWallTile(canvas);
     }
+  }
+
+  /** Bring up one tile on the stream chosen for its channel. */
+  async _startWallTile(canvas) {
+    const { NativePlayer: Player } = await nativeModule;
+    const index = Number(canvas.dataset.wall);
+    const player = new Player(
+      canvas,
+      (stats) => this._updateWallCell(index, stats),
+      () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
+      this._diagLog
+    );
+    this._wall.set(index, player);
+    player
+      .start(
+        `/api/xmeye/native/${this._entryId}/${index}?stream=${this._wallStream(index)}`,
+        this._hass.auth.accessToken
+      )
+      .catch((err) => this._updateWallCell(index, { error: String(err.message || err) }));
+  }
+
+  async _restartWallTile(index) {
+    const running = this._wall.get(index);
+    if (running) {
+      // Stop before anything is awaited, so the old connection is gone before
+      // the new one asks the recorder for the same channel.
+      running.stop();
+      this._wall.delete(index);
+    }
+    const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+    if (!canvas) return;
+    this._updateWallCell(index, { connecting: true });
+    await this._startWallTile(canvas);
   }
 
   _stopWall() {
@@ -865,9 +922,14 @@ class XmeyePanel extends HTMLElement {
   _updateWallCell(index, stats) {
     const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
     if (!foot) return;
-    foot.textContent = stats.error
-      ? `⚠ ${stats.error}`
-      : `${stats.resolution || "—"} · ${stats.fps || 0} к/с · ${fmtBitrate(stats.bitrate)}`;
+    if (stats.error) {
+      foot.textContent = `⚠ ${stats.error}`;
+    } else if (stats.connecting) {
+      foot.textContent = "підключення…";
+    } else {
+      foot.textContent =
+        `${stats.resolution || "—"} · ${stats.fps || 0} к/с · ${fmtBitrate(stats.bitrate)}`;
+    }
   }
 
   _badges(channel) {
@@ -1011,7 +1073,7 @@ class XmeyePanel extends HTMLElement {
       const canvas = this.shadowRoot.getElementById("playcanvas");
       if (!canvas) return;
       const shot = new Player(canvas, () => {}, () => {}, this._diagLog, {});
-      this._player = shot;
+      this._archivePlayer = shot;
       const params = new URLSearchParams({
         start: toLocalIso(from),
         end: toLocalIso(new Date(from.getTime() + SCRUB_WINDOW)),
@@ -1089,7 +1151,7 @@ class XmeyePanel extends HTMLElement {
       {},
       { rate: this._playback.rate }
     );
-    this._player = player;
+    this._archivePlayer = player;
 
     const params = new URLSearchParams({
       start: toLocalIso(start),
@@ -1114,9 +1176,9 @@ class XmeyePanel extends HTMLElement {
   }
 
   _stopPlayback() {
-    if (this._player) {
-      this._player.stop();
-      this._player = null;
+    if (this._archivePlayer) {
+      this._archivePlayer.stop();
+      this._archivePlayer = null;
     }
   }
 
@@ -1615,6 +1677,12 @@ class XmeyePanel extends HTMLElement {
       )
     );
 
+    root.querySelectorAll("[data-stream]").forEach((select) =>
+      select.addEventListener("change", () =>
+        this._setWallStream(Number(select.dataset.stream), select.value)
+      )
+    );
+
     root.querySelectorAll("[data-move-up]").forEach((button) =>
       button.addEventListener("click", () =>
         this._moveWallChannel(Number(button.dataset.moveUp), -1)
@@ -1658,13 +1726,13 @@ class XmeyePanel extends HTMLElement {
     const playPause = root.getElementById("playpause");
     if (playPause)
       playPause.addEventListener("click", () => {
-        if (!this._player) return;
-        if (this._player.paused) {
-          this._player.resume();
+        if (!this._archivePlayer) return;
+        if (this._archivePlayer.paused) {
+          this._archivePlayer.resume();
           this._playback.paused = false;
           playPause.textContent = "⏸";
         } else {
-          this._player.pause();
+          this._archivePlayer.pause();
           this._playback.paused = true;
           playPause.textContent = "▶";
         }
@@ -1680,8 +1748,8 @@ class XmeyePanel extends HTMLElement {
         if (wasScrub || rate >= SCRUB_RATE) {
           // Smooth playback and scrubbing use different mechanisms; restart.
           this._startPlayback(from);
-        } else if (this._player) {
-          this._player.setRate(rate);
+        } else if (this._archivePlayer) {
+          this._archivePlayer.setRate(rate);
         }
       })
     );
@@ -1826,7 +1894,7 @@ const STYLES = `
   .wall-bar { justify-content:flex-start; }
 
   /* Channel picker: which cameras go on the wall and in what order. */
-  .picker { width:210px; flex:none; background: var(--card-background-color);
+  .picker { width:248px; flex:none; background: var(--card-background-color);
     border-radius: var(--ha-card-border-radius, 12px); overflow:hidden;
     box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.08)); }
   .picker-head { padding:10px 12px; font-size:12px; text-transform:uppercase;
@@ -1844,6 +1912,10 @@ const STYLES = `
   .pick-dot { width:6px; height:6px; border-radius:50%; flex:none;
     background: var(--divider-color); }
   .pick-dot.online { background: var(--success-color, #4caf50); }
+  .pick-stream { font-size:11px; padding:1px 2px; max-width:56px;
+    background: var(--card-background-color); color: var(--primary-text-color);
+    border:1px solid var(--divider-color); border-radius:4px; }
+  .pick.off .pick-stream { pointer-events:none; opacity:.6; }
   .pick-move { display:flex; gap:2px; }
   .pick-move button { padding:0 5px; font-size:11px; line-height:1.5; }
   .pick-move button[disabled] { opacity:.3; cursor:default; }

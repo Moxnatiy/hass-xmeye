@@ -28,14 +28,17 @@ Layouts follow what a recorder itself offers: 1, 2×2, 6 and 8 with a hero tile,
 3×3 and 4×4. When there are more channels than tiles, the wall paginates.
 
 Beside the wall is a channel picker: the marker takes a channel off the wall or
-puts it back, and the arrows move it between tiles. The layout, the order and
-the selection are stored per config entry in `localStorage` and survive a
-reload. Channels the recorder gains later join the end of the list.
+puts it back, the arrows move it between tiles, and a dropdown chooses that
+camera's stream. The layout, the order, the selection and the per-channel
+stream are stored per config entry in `localStorage` and survive a reload.
+Channels the recorder gains later join the end of the list.
 
-Each tile is live video through WebCodecs on the sub stream, which is light
-enough that several channels together overload neither the browser nor the
-device. Corners and gaps are deliberately absent so the wall reads as one
-canvas.
+Each tile is live video through WebCodecs, on the sub stream by default:
+several 4K tiles at once overload both the browser and the recorder, which has
+about ten connections to give in total. Changing one camera's stream restarts
+that tile alone rather than the whole wall.
+
+Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 ## Playback methods
 

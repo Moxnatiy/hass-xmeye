@@ -80,29 +80,37 @@ def test_panel_imports_resolve() -> None:
             assert (PANEL_DIR / target).exists(), f"{source.name} → {target} is missing"
 
 
-#: Fields that look like a flag (``= true/false``) and like an object at the same
-#: time (``.something`` or ``= <expression>``) are nearly always a name collision.
-_FLAG_ASSIGN = re.compile(r"this\.(_[A-Za-z][A-Za-z0-9]*)\s*=\s*(?:true|false)\s*;")
+#: Fields assigned a plain value (a flag, a number, a string) and also used as an
+#: object (``.something``) are nearly always two meanings sharing one name.
+#: ``null`` is left out: assigning it to an object field is ordinary teardown.
+_SCALAR_ASSIGN = re.compile(
+    r"""this\.(_[A-Za-z][A-Za-z0-9]*)\s*=\s*"""
+    r"""(?:true|false|"[^"\n]*"|'[^'\n]*'|\d+(?:\.\d+)?)\s*;"""
+)
 _OBJECT_USE = re.compile(r"this\.(_[A-Za-z][A-Za-z0-9]*)\.[A-Za-z]")
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda p: p.name)
-def test_no_flag_and_object_name_collision(source: Path) -> None:
-    """One field must not be both a flag and an object.
+def test_no_scalar_and_object_name_collision(source: Path) -> None:
+    """One field must not be both a plain value and an object.
 
-    This is exactly how the player broke: the read loop used ``_pending`` to mean
-    "time to configure the decoder", while the drawing code stored a frame in it.
-    Every frame triggered a reconfigure and the video fell apart, with no error
-    visible in the code itself.
+    This is exactly how the player broke twice. First ``_pending`` meant "time to
+    configure the decoder" to the read loop while the drawing code stored a frame
+    in it, so every frame triggered a reconfigure. Then ``_player`` held the live
+    playback method ("native"/"hls") *and* the archive player object, so
+    ``_stopPlayback()`` nulled the method and the viewer silently dropped to
+    snapshots at one frame per second.
+
+    Neither produced an error anywhere near the cause.
     """
     text = source.read_text(encoding="utf-8")
-    flags = set(_FLAG_ASSIGN.findall(text))
+    scalars = set(_SCALAR_ASSIGN.findall(text))
     objects = set(_OBJECT_USE.findall(text))
 
-    collisions = sorted(flags & objects)
+    collisions = sorted(scalars & objects)
     assert not collisions, (
-        f"{source.name}: {collisions} are used both as a flag and as an object. "
-        "Give the two meanings different names."
+        f"{source.name}: {collisions} are used both as a plain value and as an "
+        "object. Give the two meanings different names."
     )
 
 
