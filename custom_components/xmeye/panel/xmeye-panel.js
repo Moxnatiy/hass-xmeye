@@ -768,7 +768,7 @@ class XmeyePanel extends HTMLElement {
         <li class="pick ${shown ? "on" : "off"}" data-index="${channel.index}">
           <button class="pick-dot ${shown ? "shown" : ""} ${channel.online ? "online" : ""}"
                   data-pick="${channel.index}" title="${state}"></button>
-          <span class="pick-grip" title="Перетягніть, щоб змінити порядок">⠿</span>
+          <span class="pick-grip" title="Перетягніть, щоб змінити порядок"></span>
           <span class="pick-num">${channel.index + 1}</span>
           <span class="pick-name" title="${channel.name}">${channel.name}</span>
           <select class="pick-stream" data-stream="${channel.index}"
@@ -2012,8 +2012,14 @@ const STYLES = `
   .pick-dot.online { border-color: var(--success-color, #4caf50); }
   .pick-dot.shown { background: var(--secondary-text-color); }
   .pick-dot.shown.online { background: var(--success-color, #4caf50); }
-  .pick-grip { flex:none; cursor:grab; user-select:none; font-size:11px; line-height:1;
-    color: var(--secondary-text-color); }
+  /* The grip is drawn rather than typed: the braille glyph that reads as a grip
+     sits in the upper half of its em box, so it never lines up with the text
+     beside it, and how far off depends on the font. Six dots on a 4px grid in a
+     box whose sides are exact multiples of it land dead centre in any font. */
+  .pick-grip { flex:none; width:8px; height:12px; cursor:grab; user-select:none;
+    color: var(--secondary-text-color);
+    background-image: radial-gradient(currentColor 1px, transparent 1.5px);
+    background-size: 4px 4px; background-position: center; }
   .pick-grip:active { cursor:grabbing; }
   .pick-num { width:15px; text-align:right; color: var(--secondary-text-color);
     font-variant-numeric: tabular-nums; }
