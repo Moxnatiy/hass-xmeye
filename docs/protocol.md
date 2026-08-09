@@ -253,6 +253,45 @@ current frame, so a decoder trips over delta frames with no reference
   playback request. Measured properly: with nothing throttling the reader, 45
   seconds of wall time delivered 46 seconds of archive.
 
+### How the vendor app drives playback: two sockets, one session
+
+Captured from the app itself (`tools/read_capture.py` reads the pcap), and then
+reproduced against the device:
+
+**A login is per session, not per socket.** The app logs in once, then opens
+further TCP connections that never log in at all and simply carry the same
+`SessionID`. The device accepts them.
+
+```
+socket A   login  ->  SessionID 0x000004df        (control, long-lived)
+socket B   msgid 1424  OPPlayBack Action=Claim, SessionID 0x000004df
+socket A   msgid 1420  OPPlayBack Action=Start,  SessionID 0x000004df
+socket B   msgid 1422  <- the frames arrive here
+```
+
+The claim on the data socket is answered `Ret 100` but nothing flows until the
+start goes out **on the control socket**. That split is the whole point: the
+control channel stays free to steer a stream it is not carrying.
+
+The claim carries a real recording path even in `ByTime` mode:
+
+```json
+{"Name": "OPPlayBack", "SessionID": "0x00000004df", "OPPlayBack": {
+  "Action": "Claim",
+  "Parameter": {"PlayMode": "ByTime", "Channel": 0, "StreamType": 0, "Value": 0,
+                "TransMode": "TCP",
+                "FileName": "/idea0/2026-08-10/001/00.00.00-00.00.05[R][@4b0d][0].h264"},
+  "StartTime": "2026-08-10 00:00:00", "EndTime": "2026-08-10 23:59:59"}}
+```
+
+`Start` and `DownloadStart` behave differently and the difference matters:
+`Start` is **paced** — measured at a steady 0.96x with a flat 160 KB/s — while
+`DownloadStart` bursts, which is what makes short-window measurements of a
+download session meaningless.
+
+The app's `OPMonitor` claim carries `"Action1": "Start"`, doing claim and start
+in one message rather than two.
+
 ### The speed actions, and why measuring them is a trap
 
 The vendor SDK carries a full action vocabulary for `OPPlayBack`:
@@ -297,12 +336,31 @@ OtherFunction.SupportMaxPlayback         True
 
 and the SDK branches on `SupportPlaybackLocate`: with it the app sends a seek
 into the running session, without it the app tears the session down and opens a
-new one (`SeekTime,Not found,New NetFileSender`). So an in-session seek exists
-even though the speed actions appear inert. Reproducing the exact form the app
-sends is unfinished work — the way to settle it is a packet capture of the
-vendor app while its fast-forward button is pressed, not more guessing.
+new one (`SeekTime,Not found,New NetFileSender`).
 
-`tools/probe_playback_speed.py` runs the measurement, control case included.
+**The device can play the archive fast — that part is settled.** Measured from
+the app's own traffic, frame timestamps against packet capture times:
+
+```
+ 10.9..19.0s   00:00:00 -> 00:00:15    1.85x
+ 19.4..27.5s   00:00:16 -> 00:00:58    5.20x
+```
+
+and the jump follows a `msgid 1420` sent on the control socket. What that
+message says is still unknown: the app's long-lived control connection encrypts
+its payloads (base64 over AES-128-ECB — identical plaintext prefixes produce
+identical ciphertext blocks), while every connection it opens afterwards stays
+plaintext. The key is negotiated at login (`CommunicateKey` sits beside
+`UserName` and `PassWord` in the SDK's login field list), and neither capture
+caught a login, because the app kept its control connection alive across both.
+
+Sending `Fast` and `Slow` in plaintext on the control socket, with the two-socket
+architecture reproduced exactly, changed nothing: 0.96x, 0.96x, 0.97x, 0.96x. So
+the difference is in what that encrypted message *says*, not in how the session
+is built.
+
+`tools/probe_playback_speed.py` runs the speed measurement with its control
+case; `tools/read_capture.py` reads a pcap of the vendor app.
 
 ## 10. Prior art
 
