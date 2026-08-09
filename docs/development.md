@@ -79,6 +79,7 @@ All of them read only; none change anything on the device.
 | `tools/live_media.py` | Live stream, sub stream, snapshot and archive download, each validated with `ffprobe` so that "works" means "ffmpeg opens it" |
 | `tools/discover.py` | Walks every known configuration section and command and writes a JSON capability map for one firmware |
 | `tools/dvrip_probe.py` | A dependency-free raw-protocol probe, for when the question is whether the device or the library is at fault |
+| `tools/probe_playback_speed.py` | Tests whether the recorder acts on the archive speed and pause actions, with a control run that sends nothing — without one, the bursty stream makes any action look like it worked |
 | `tools/analyse_service_blocks.py` | Collects the 127-byte service blocks and checks whether their content changes while something moves in view |
 | `tools/sync_lib.py` | Syncs the vendored library copy |
 | `tools/ha_restart.sh` | Restarts a development Home Assistant, forcing the port free instead of waiting out the database shutdown |

@@ -249,9 +249,60 @@ current frame, so a decoder trips over delta frames with no reference
 - Downloading: `OPPlayBack` claim (1424), then `DownloadStart` (1420), then the
   data, then `DownloadStop`. The format is not MP4 but the same raw frame
   container as section 6, so a client must demux and remux it.
-- The recorder feeds the archive **strictly at ×1.0** and ignores `StreamType`
-  in a playback request — measured. There is no fast-forward command, so any
-  faster playback has to be built from seeks.
+- The recorder feeds the archive **at ×1.0** and ignores `StreamType` in a
+  playback request. Measured properly: with nothing throttling the reader, 45
+  seconds of wall time delivered 46 seconds of archive.
+
+### The speed actions, and why measuring them is a trap
+
+The vendor SDK carries a full action vocabulary for `OPPlayBack`:
+
+| Group | Actions |
+|---|---|
+| Session | `Claim`, `DownloadStart`, `DownloadStop`, `DownloadStartCollection`, `DownloadStopCollection`, `AcrossStart`, `AcrossStop` |
+| Speed | `Fast`, `Slow` |
+| Position | `Seek`, `Locate` |
+| Pause | `DownloadPause`, `DownloadContinue`; a streaming session uses `Pause`, `Continue` |
+| Other | `ForceIframe`, `OpenSound`, `CloseSound`, `VDResume` |
+
+The `Parameter` block holds more than the library sends:
+
+```json
+{"FileName": "", "PlayMode": "ByTime", "StreamType": 0, "Value": 0,
+ "TransMode": "TCP", "IntelligentPlayBackEvent": "ALL",
+ "IntelligentPlayBackSpeed": 0}
+```
+
+`IntelligentPlayBackEvent` and `IntelligentPlayBackSpeed` belong to a separate
+feature: playing back only the intervals that hold events.
+
+On the NBD8008R-U none of `Fast`, `Slow` or `DownloadPause` changed the delivery
+rate. That claim needs a caveat about *how* it was tested, because the obvious
+test lies. An archive session arrives in bursts, so a ten-second window measures
+whichever burst it caught. A control run that sends **nothing at all** wanders
+
+    1.11x  1.11x  2.03x  1.03x  1.36x  0.72x
+
+across six consecutive windows — including a clean-looking 2.0x. Send `Fast`
+between windows and that same 2.0x reads as proof the command worked. It is not.
+Only the long average, or a control run beside the measurement, settles it.
+
+The device does advertise the capabilities:
+
+```
+OtherFunction.SupportPlaybackLocate      True
+OtherFunction.SupportPlayBackExactSeek   True
+OtherFunction.SupportMaxPlayback         True
+```
+
+and the SDK branches on `SupportPlaybackLocate`: with it the app sends a seek
+into the running session, without it the app tears the session down and opens a
+new one (`SeekTime,Not found,New NetFileSender`). So an in-session seek exists
+even though the speed actions appear inert. Reproducing the exact form the app
+sends is unfinished work — the way to settle it is a packet capture of the
+vendor app while its fast-forward button is pressed, not more guessing.
+
+`tools/probe_playback_speed.py` runs the measurement, control case included.
 
 ## 10. Prior art
 
