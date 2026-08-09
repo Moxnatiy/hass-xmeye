@@ -27,11 +27,17 @@ section. Useful for finding a section name for `xmeye.get_config`.
 Layouts follow what a recorder itself offers: 1, 2×2, 6 and 8 with a hero tile,
 3×3 and 4×4. When there are more channels than tiles, the wall paginates.
 
-Beside the wall is a channel picker: the marker takes a channel off the wall or
-puts it back, the arrows move it between tiles, and a dropdown chooses that
-camera's stream. The layout, the order, the selection and the per-channel
-stream are stored per config entry in `localStorage` and survive a reload.
-Channels the recorder gains later join the end of the list.
+Beside the wall is a channel picker, one compact row per channel. The marker on
+the left carries two facts at once: filled means the channel is on the wall,
+green means the recorder sees it — a click toggles it. Next to it is a grip for
+dragging the row to a new position, and at the end a dropdown for that camera's
+stream. The layout, the order, the selection and the per-channel stream are
+stored per config entry in `localStorage` and survive a reload. Channels the
+recorder gains later join the end of the list.
+
+Only the grip starts a drag, since the row also holds a select and a row that is
+draggable everywhere makes that awkward to use. Reordering by drag needs a
+mouse: HTML5 drag and drop does not fire on touch.
 
 Each tile is live video through WebCodecs, on the sub stream by default:
 several 4K tiles at once overload both the browser and the recorder, which has

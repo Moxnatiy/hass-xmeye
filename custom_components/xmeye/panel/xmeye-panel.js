@@ -754,17 +754,23 @@ class XmeyePanel extends HTMLElement {
    */
   _wallPicker(sequence) {
     const hidden = this._loadWallPrefs().hidden;
-    const rows = sequence.map((channel, position) => {
+    const rows = sequence.map((channel) => {
       const shown = !hidden.includes(channel.index);
+      // One control carries both facts: filled means the channel is on the wall,
+      // green means the recorder sees it. Two separate marks said the same thing
+      // twice and cost half the row.
+      const state = shown
+        ? channel.online
+          ? "На стіні, канал онлайн"
+          : "На стіні, канал офлайн"
+        : "Не на стіні";
       return `
-        <li class="pick ${shown ? "on" : "off"}">
-          <button class="pick-eye" data-pick="${channel.index}"
-                  title="${shown ? "Прибрати зі стіни" : "Показати на стіні"}">
-            ${shown ? "◉" : "○"}
-          </button>
+        <li class="pick ${shown ? "on" : "off"}" data-index="${channel.index}">
+          <button class="pick-dot ${shown ? "shown" : ""} ${channel.online ? "online" : ""}"
+                  data-pick="${channel.index}" title="${state}"></button>
+          <span class="pick-grip" title="Перетягніть, щоб змінити порядок">⠿</span>
           <span class="pick-num">${channel.index + 1}</span>
           <span class="pick-name" title="${channel.name}">${channel.name}</span>
-          <span class="pick-dot ${channel.online ? "online" : ""}"></span>
           <select class="pick-stream" data-stream="${channel.index}"
                   title="Потік цієї камери на стіні">
             ${WALL_STREAMS.map(
@@ -774,12 +780,6 @@ class XmeyePanel extends HTMLElement {
                 }>${label}</option>`
             ).join("")}
           </select>
-          <span class="pick-move">
-            <button class="ghost" data-move-up="${position}"
-                    ${position === 0 ? "disabled" : ""} title="Вище">▴</button>
-            <button class="ghost" data-move-down="${position}"
-                    ${position === sequence.length - 1 ? "disabled" : ""} title="Нижче">▾</button>
-          </span>
         </li>`;
     });
     return `
@@ -787,6 +787,67 @@ class XmeyePanel extends HTMLElement {
         <div class="picker-head">Канали стіни</div>
         <ul class="pick-list">${rows.join("")}</ul>
       </aside>`;
+  }
+
+  /**
+   * Reordering by dragging a row.
+   *
+   * Only the grip starts a drag: the row also holds a select, and a row that is
+   * draggable at every point makes that awkward to use.
+   */
+  _bindWallDrag(list) {
+    let dragging = null;
+
+    list.querySelectorAll(".pick-grip").forEach((grip) => {
+      const row = grip.closest(".pick");
+      const arm = () => (row.draggable = true);
+      grip.addEventListener("mousedown", arm);
+      grip.addEventListener("touchstart", arm, { passive: true });
+    });
+
+    // A press that never became a drag must disarm the row again, or it stays
+    // draggable and the select inside it becomes hard to use.
+    list.addEventListener("mouseup", () => {
+      if (!dragging) list.querySelectorAll(".pick").forEach((row) => (row.draggable = false));
+    });
+
+    list.addEventListener("dragstart", (event) => {
+      dragging = event.target.closest(".pick");
+      if (!dragging) return;
+      dragging.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      // Firefox refuses to start a drag with no data attached.
+      event.dataTransfer.setData("text/plain", dragging.dataset.index);
+    });
+
+    list.addEventListener("dragover", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      const over = event.target.closest(".pick");
+      if (!over || over === dragging) return;
+      // Past the midpoint the row belongs below the one under the cursor.
+      const box = over.getBoundingClientRect();
+      const below = event.clientY > box.top + box.height / 2;
+      list.insertBefore(dragging, below ? over.nextSibling : over);
+    });
+
+    list.addEventListener("dragend", () => {
+      if (!dragging) return;
+      dragging.classList.remove("dragging");
+      dragging.draggable = false;
+      dragging = null;
+      this._commitWallOrder(list);
+    });
+  }
+
+  /** Take the order from the list as it now stands and redraw the wall. */
+  _commitWallOrder(list) {
+    const order = [...list.querySelectorAll(".pick")].map((row) => Number(row.dataset.index));
+    const prefs = this._loadWallPrefs();
+    if (order.join() === prefs.order.join()) return;
+    prefs.order = order;
+    this._saveWallPrefs();
+    this._render();
   }
 
   /**
@@ -864,16 +925,6 @@ class XmeyePanel extends HTMLElement {
     this._render();
   }
 
-  _moveWallChannel(position, step) {
-    const enabled = this._detail.channels.filter((c) => c.enabled);
-    const order = this._wallSequence(enabled).map((c) => c.index);
-    const target = position + step;
-    if (target < 0 || target >= order.length) return;
-    [order[position], order[target]] = [order[target], order[position]];
-    this._loadWallPrefs().order = order;
-    this._saveWallPrefs();
-    this._render();
-  }
 
   /** Tile style: in hero layouts the first tile spans a larger block. */
   _cellSpan(layout, position) {
@@ -1740,16 +1791,8 @@ class XmeyePanel extends HTMLElement {
       )
     );
 
-    root.querySelectorAll("[data-move-up]").forEach((button) =>
-      button.addEventListener("click", () =>
-        this._moveWallChannel(Number(button.dataset.moveUp), -1)
-      )
-    );
-    root.querySelectorAll("[data-move-down]").forEach((button) =>
-      button.addEventListener("click", () =>
-        this._moveWallChannel(Number(button.dataset.moveDown), 1)
-      )
-    );
+    const pickList = root.querySelector(".pick-list");
+    if (pickList) this._bindWallDrag(pickList);
 
     const prev = root.getElementById("wallprev");
     if (prev)
@@ -1951,31 +1994,34 @@ const STYLES = `
   .wall-bar { justify-content:flex-start; }
 
   /* Channel picker: which cameras go on the wall and in what order. */
-  .picker { width:248px; flex:none; background: var(--card-background-color);
+  .picker { width:206px; flex:none; background: var(--card-background-color);
     border-radius: var(--ha-card-border-radius, 12px); overflow:hidden;
     box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.08)); }
-  .picker-head { padding:10px 12px; font-size:12px; text-transform:uppercase;
+  .picker-head { padding:7px 10px; font-size:11px; text-transform:uppercase;
     letter-spacing:.4px; color: var(--secondary-text-color);
     border-bottom:1px solid var(--divider-color); }
-  .pick-list { list-style:none; margin:0; padding:4px 0; max-height:70vh; overflow:auto; }
-  .pick { display:flex; align-items:center; gap:6px; padding:2px 8px; font-size:13px; }
-  .pick.off { opacity:.5; }
-  .pick-eye { background:none; border:none; padding:2px; cursor:pointer; font-size:14px;
-    color: var(--primary-color); }
-  .pick.off .pick-eye { color: var(--secondary-text-color); }
-  .pick-num { width:18px; text-align:right; color: var(--secondary-text-color);
+  .pick-list { list-style:none; margin:0; padding:3px 0; max-height:70vh; overflow:auto; }
+  .pick { display:flex; align-items:center; gap:5px; padding:1px 7px; font-size:12px;
+    line-height:1.7; }
+  .pick.off { opacity:.55; }
+  .pick.dragging { opacity:.4; background: var(--divider-color); }
+  /* One mark, two facts: filled means "on the wall", green means "camera online". */
+  .pick-dot { width:11px; height:11px; flex:none; padding:0; border-radius:50%;
+    cursor:pointer; background:transparent;
+    border:1.5px solid var(--secondary-text-color); }
+  .pick-dot.online { border-color: var(--success-color, #4caf50); }
+  .pick-dot.shown { background: var(--secondary-text-color); }
+  .pick-dot.shown.online { background: var(--success-color, #4caf50); }
+  .pick-grip { flex:none; cursor:grab; user-select:none; font-size:11px; line-height:1;
+    color: var(--secondary-text-color); }
+  .pick-grip:active { cursor:grabbing; }
+  .pick-num { width:15px; text-align:right; color: var(--secondary-text-color);
     font-variant-numeric: tabular-nums; }
   .pick-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .pick-dot { width:6px; height:6px; border-radius:50%; flex:none;
-    background: var(--divider-color); }
-  .pick-dot.online { background: var(--success-color, #4caf50); }
-  .pick-stream { font-size:11px; padding:1px 2px; max-width:56px;
+  .pick-stream { font-size:11px; padding:0 2px; max-width:52px; flex:none;
     background: var(--card-background-color); color: var(--primary-text-color);
     border:1px solid var(--divider-color); border-radius:4px; }
   .pick.off .pick-stream { pointer-events:none; opacity:.6; }
-  .pick-move { display:flex; gap:2px; }
-  .pick-move button { padding:0 5px; font-size:11px; line-height:1.5; }
-  .pick-move button[disabled] { opacity:.3; cursor:default; }
   @media (max-width: 900px) {
     .wall-layout { flex-direction:column; }
     .picker { width:100%; }
