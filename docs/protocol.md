@@ -395,14 +395,19 @@ and this whole client relies on it. The vendor app can *opt into* encrypting a
 connection's payloads through the login handshake; the device does not require
 it. Reverse-engineered from the app's SDK, for reference:
 
-- Payloads become `base64(AES-128-ECB(payload))` with PKCS padding. (A CBC
-  variant exists in the SDK but the control channel used ECB — identical
-  plaintext prefixes produced identical 16-byte ciphertext prefixes.)
-- Keys are derived as `SHA1(SHA1(seed))[:16]`.
+- Payloads become `base64(AES-128-CBC(payload))` with a zero IV and PKCS
+  padding (`XAES::Encrypt128_Base64` in the SDK). CBC with a fixed zero IV still
+  yields equal ciphertext prefixes for equal plaintext prefixes, which is what
+  the capture showed.
+- The SDK also derives some keys as `SHA1(SHA1(seed))[:16]` and carries a
+  hardcoded cloud-token key (`"JAVA真好喝啊"`), but the device wire channel does
+  not use either: its key is the raw 16-byte `CommunicateKey`.
 - The handshake is a Diffie-Hellman-style exchange: the client's
   `OPMonitor Claim` carries `DHParameter.RandomStrA` in the clear, the device
-  replies with `RandomStrB` and a `CommunicateKey`, and the data channel key
-  comes from those.
+  replies with `RandomStrB`, and the client sends a `CommunicateKey` (random,
+  from `XAES::RandStr`) inside the encrypted login. The data channel then uses
+  that CommunicateKey as its AES key — so it is per-session random, readable
+  only from a decrypted login, not derivable from the password.
 
 None of this is needed to talk to the recorder, and the library does not
 implement it. It is documented only because the app's adjustable server-side
