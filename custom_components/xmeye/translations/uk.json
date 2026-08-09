@@ -1,0 +1,150 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XMeye / Xiongmai NVR",
+        "description": "Підключення до реєстратора в локальній мережі (DVRIP, порт 34567).",
+        "data": {
+          "host": "Адреса",
+          "username": "Користувач",
+          "password": "Пароль",
+          "port": "Порт DVRIP",
+          "rtsp_port": "Порт RTSP"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Пароль змінено",
+        "description": "Введіть поточний пароль для {host}.",
+        "data": { "password": "Пароль" }
+      }
+    },
+    "error": {
+      "cannot_connect": "Реєстратор не відповідає",
+      "invalid_auth": "Невірний користувач або пароль",
+      "unknown": "Несподівана помилка"
+    },
+    "abort": {
+      "already_configured": "Цей реєстратор уже додано",
+      "reauth_successful": "Автентифікацію поновлено"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Налаштування XMeye",
+        "data": {
+          "channels": "Канали, які показувати",
+          "stream": "Потік для перегляду",
+          "snapshot_stream": "Потік для стоп-кадру",
+          "scan_interval": "Період опитування",
+          "use_rtsp": "Використовувати RTSP для відео",
+          "enable_panel": "Показувати панель XMeye у меню"
+        },
+        "data_description": {
+          "stream": "Додатковий потік значно легший для перекодування; основний — 4K.",
+          "use_rtsp": "Вимикайте, лише якщо RTSP на реєстраторі вимкнено."
+        }
+      }
+    }
+  },
+  "selector": {
+    "stream": {
+      "options": { "main": "Основний потік", "sub": "Додатковий потік" }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "uptime": { "name": "Час роботи" },
+      "total_bitrate": { "name": "Сумарний бітрейт" },
+      "channels_online": { "name": "Каналів онлайн" },
+      "recording_channels": { "name": "Каналів пише" },
+      "disk_used": { "name": "Диск зайнято" },
+      "disk_free": { "name": "Диск вільно" },
+      "archive_from": { "name": "Архів від" },
+      "archive_to": { "name": "Архів до" },
+      "device_time": { "name": "Час реєстратора" },
+      "channel_bitrate": { "name": "Бітрейт" }
+    },
+    "binary_sensor": {
+      "recording": { "name": "Запис" },
+      "motion_any": { "name": "Рух" },
+      "disk_problem": { "name": "Проблема з диском" },
+      "alarm_input": { "name": "Тривожний вхід" },
+      "channel_motion": { "name": "Рух" },
+      "channel_recording": { "name": "Запис" },
+      "channel_online": { "name": "Підключено" },
+      "channel_video_loss": { "name": "Втрата відео" },
+      "channel_blind": { "name": "Камеру засліплено" }
+    },
+    "switch": {
+      "channel_motion_detect": { "name": "Детекція руху" },
+      "channel_blind_detect": { "name": "Детекція засліплення" },
+      "channel_loss_detect": { "name": "Детекція втрати відео" }
+    },
+    "button": {
+      "reboot": { "name": "Перезавантажити" },
+      "sync_time": { "name": "Синхронізувати час" }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "Керування PTZ",
+      "description": "Рух поворотної камери або перехід до пресету.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "До якого реєстратора звертатись." },
+        "direction": { "name": "Напрямок", "description": "Команда руху або об'єктива." },
+        "channel": { "name": "Канал", "description": "Номер каналу, з нуля." },
+        "speed": { "name": "Швидкість", "description": "Розмір кроку, від 1 до 8." },
+        "duration": { "name": "Тривалість", "description": "Скільки секунд рухатись." },
+        "preset": { "name": "Пресет", "description": "Перейти до пресету замість руху." }
+      }
+    },
+    "search_recordings": {
+      "name": "Пошук записів",
+      "description": "Перелік записів архіву для каналу й проміжку часу.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "Де шукати." },
+        "channel": { "name": "Канал", "description": "Номер каналу, з нуля." },
+        "start": { "name": "Початок", "description": "Початок проміжку." },
+        "end": { "name": "Кінець", "description": "Кінець проміжку." },
+        "event": { "name": "Подія", "description": "* усі, M рух, A тривога, R розклад, H вручну." }
+      }
+    },
+    "download_recording": {
+      "name": "Завантажити запис",
+      "description": "Зберегти запис у теку media як елементарний потік.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "Звідки завантажувати." },
+        "filename": { "name": "Ім'я файлу", "description": "Значення з «Пошуку записів»." },
+        "start": { "name": "Початок", "description": "Час початку запису." },
+        "end": { "name": "Кінець", "description": "Час кінця запису." },
+        "channel": { "name": "Канал", "description": "Номер каналу, з нуля." }
+      }
+    },
+    "get_config": {
+      "name": "Прочитати конфігурацію",
+      "description": "Прочитати одну секцію конфігурації реєстратора.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "Звідки читати." },
+        "section": { "name": "Секція", "description": "Наприклад NetWork.NetCommon." }
+      }
+    },
+    "set_config": {
+      "name": "Записати конфігурацію",
+      "description": "Записати одну секцію конфігурації в реєстратор.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "Що змінювати." },
+        "section": { "name": "Секція", "description": "Наприклад General.Location." },
+        "value": { "name": "Значення", "description": "Повний вміст секції." }
+      }
+    },
+    "talk": {
+      "name": "Відтворити звук",
+      "description": "Надіслати звук G.711 на динамік реєстратора.",
+      "fields": {
+        "config_entry_id": { "name": "Реєстратор", "description": "Куди надсилати." },
+        "audio_file": { "name": "Аудіофайл", "description": "Шлях до сирого G.711 A-law." }
+      }
+    }
+  }
+}

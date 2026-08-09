@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+venv/
+.ha-venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local-only material: device dumps, logs, credentials, vendor documents.
+.local/
+.env
+.ha-config/
+capabilities.json
+
+# Media pulled off a recorder
+*.h264
+*.h265
+*.mp4
+*.jpg
+
+.DS_Store

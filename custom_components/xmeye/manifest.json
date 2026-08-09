@@ -1,0 +1,21 @@
+{
+  "domain": "xmeye",
+  "name": "XMeye / Xiongmai NVR",
+  "codeowners": [
+    "@Moxnatiy"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "ffmpeg",
+    "frontend",
+    "http",
+    "stream",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/Moxnatiy/hass-xmeye",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Moxnatiy/hass-xmeye/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

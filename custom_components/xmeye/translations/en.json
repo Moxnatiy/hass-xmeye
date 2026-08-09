@@ -1,0 +1,150 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XMeye / Xiongmai NVR",
+        "description": "Connect to a recorder over the local network (DVRIP, port 34567).",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "port": "DVRIP port",
+          "rtsp_port": "RTSP port"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Password changed",
+        "description": "Enter the current password for {host}.",
+        "data": { "password": "Password" }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the recorder",
+      "invalid_auth": "Wrong username or password",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This recorder is already configured",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "XMeye options",
+        "data": {
+          "channels": "Channels to expose",
+          "stream": "Live stream",
+          "snapshot_stream": "Snapshot stream",
+          "scan_interval": "Update interval",
+          "use_rtsp": "Use RTSP for live video",
+          "enable_panel": "Show the XMeye sidebar panel"
+        },
+        "data_description": {
+          "stream": "The sub stream is far lighter to transcode; the main stream is 4K.",
+          "use_rtsp": "Turn off only if RTSP is disabled on the recorder."
+        }
+      }
+    }
+  },
+  "selector": {
+    "stream": {
+      "options": { "main": "Main stream", "sub": "Sub stream" }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "uptime": { "name": "Uptime" },
+      "total_bitrate": { "name": "Total bitrate" },
+      "channels_online": { "name": "Channels online" },
+      "recording_channels": { "name": "Recording channels" },
+      "disk_used": { "name": "Disk used" },
+      "disk_free": { "name": "Disk free" },
+      "archive_from": { "name": "Archive starts" },
+      "archive_to": { "name": "Archive ends" },
+      "device_time": { "name": "Recorder time" },
+      "channel_bitrate": { "name": "Bitrate" }
+    },
+    "binary_sensor": {
+      "recording": { "name": "Recording" },
+      "motion_any": { "name": "Motion" },
+      "disk_problem": { "name": "Disk problem" },
+      "alarm_input": { "name": "Alarm input" },
+      "channel_motion": { "name": "Motion" },
+      "channel_recording": { "name": "Recording" },
+      "channel_online": { "name": "Connected" },
+      "channel_video_loss": { "name": "Video loss" },
+      "channel_blind": { "name": "Camera blinded" }
+    },
+    "switch": {
+      "channel_motion_detect": { "name": "Motion detection" },
+      "channel_blind_detect": { "name": "Blind detection" },
+      "channel_loss_detect": { "name": "Video loss detection" }
+    },
+    "button": {
+      "reboot": { "name": "Reboot" },
+      "sync_time": { "name": "Sync time" }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "PTZ control",
+      "description": "Move a PTZ camera or jump to a preset.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to talk to." },
+        "direction": { "name": "Direction", "description": "Movement or lens command." },
+        "channel": { "name": "Channel", "description": "Channel number, counted from 0." },
+        "speed": { "name": "Speed", "description": "Step size, 1 to 8." },
+        "duration": { "name": "Duration", "description": "How long to move, in seconds." },
+        "preset": { "name": "Preset", "description": "Go to this preset instead of moving." }
+      }
+    },
+    "search_recordings": {
+      "name": "Search recordings",
+      "description": "List archive recordings for a channel and time range.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to query." },
+        "channel": { "name": "Channel", "description": "Channel number, counted from 0." },
+        "start": { "name": "Start", "description": "Beginning of the range." },
+        "end": { "name": "End", "description": "End of the range." },
+        "event": { "name": "Event", "description": "* all, M motion, A alarm, R schedule, H manual." }
+      }
+    },
+    "download_recording": {
+      "name": "Download recording",
+      "description": "Download a recording into the media folder as an elementary stream.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to query." },
+        "filename": { "name": "File name", "description": "Name returned by Search recordings." },
+        "start": { "name": "Start", "description": "Recording start time." },
+        "end": { "name": "End", "description": "Recording end time." },
+        "channel": { "name": "Channel", "description": "Channel number, counted from 0." }
+      }
+    },
+    "get_config": {
+      "name": "Read configuration",
+      "description": "Read one configuration section from the recorder.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to query." },
+        "section": { "name": "Section", "description": "For example NetWork.NetCommon." }
+      }
+    },
+    "set_config": {
+      "name": "Write configuration",
+      "description": "Write one configuration section back to the recorder.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to change." },
+        "section": { "name": "Section", "description": "For example General.Location." },
+        "value": { "name": "Value", "description": "Full section content." }
+      }
+    },
+    "talk": {
+      "name": "Play audio",
+      "description": "Send G.711 audio to the recorder's speaker.",
+      "fields": {
+        "config_entry_id": { "name": "Recorder", "description": "Which recorder to talk to." },
+        "audio_file": { "name": "Audio file", "description": "Path to raw G.711 A-law audio." }
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+name: Bug report
+description: Something does not work with a recorder
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste passwords, Sofia hashes, serial numbers or public
+        addresses. The Sofia hash is password-equivalent.
+  - type: input
+    id: model
+    attributes:
+      label: Recorder model
+      placeholder: NBD8008R-U
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Settings -> Devices & services -> the recorder device page
+      placeholder: V4.03.R11.061B0197
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Home Assistant logs for `custom_components.xmeye`, and for a playback
+        problem the panel's diagnostics log (the copy button under the video).
+      render: text
