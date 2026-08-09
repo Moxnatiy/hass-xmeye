@@ -388,6 +388,29 @@ control command, which is still unread.
 
 `tools/probe_playback_value.py` maps the field.
 
+### Cross-checked against the vendor SDK
+
+The Xiongmai FunSDK demos (`github.com/xmeye-team`) ship the SDK headers, which
+confirm the model:
+
+- `setPlaySpeed` documents `speed 0/1/2 = 1x/2x/4x`, but that path is
+  `CDecoder::OnSetSpeed` — **client-side decoder pacing**, not a device command.
+  This is exactly what the panel does at ×1–×2, so no device round-trip is
+  needed for modest speeds.
+- Server-side fast playback is the "intelligent play" path
+  (`Fun_MediaSetIntellPlay`), backed by the OPPlayBack `IntelligentPlayBackEvent`
+  / `IntelligentPlayBackSpeed` fields. On the NBD8008R-U those fields are
+  **ignored** (Event=Motion/ALL, Speed=8 all returned the plain 1x stream), so
+  the only server-side acceleration this firmware honours is `Parameter.Value=2`.
+- The wire `Value` field is **not** the clean `0/1/2 = 1x/2x/4x` enum: `Value=1`
+  returns nothing on this firmware, only `Value=2` decimates. So `Value` is a
+  coarse mode selector here, not the SDK's speed index.
+
+The practical conclusion: the encrypted control channel hides nothing we need.
+The vendor app sends the same plaintext OPPlayBack commands; adjustable speed is
+client-side pacing, and the one server-side fast mode is the plaintext
+`Value=2`. Both are already in the integration.
+
 ## 12. Optional payload encryption
 
 The device speaks DVRIP in the clear — the login reply says `DataUseAES: false`,
