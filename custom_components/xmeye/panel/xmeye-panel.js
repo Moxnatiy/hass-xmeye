@@ -2171,4 +2171,10 @@ const STYLES = `
   }
 `;
 
-customElements.define("xmeye-panel", XmeyePanel);
+// The version stamp gives the module a new URL after every edit, so a page that
+// has already loaded an older copy evaluates this file a second time — and the
+// registry keeps the first definition forever. Defining again throws and takes
+// the whole panel down, so the second evaluation must be a no-op.
+if (!customElements.get("xmeye-panel")) {
+  customElements.define("xmeye-panel", XmeyePanel);
+}
