@@ -17,8 +17,20 @@ seconds, and per-channel state. Clicking a card opens the viewer.
 **Archive** — a day timeline with recordings coloured by event, and the archive
 player.
 
+**Settings** — the recorder's own settings, grouped the way the vendor apps
+present them, with typed fields and a save button. The groups are declared as
+data (`SETTINGS_GROUPS`), so adding one is a schema change rather than new
+markup, and each field states its type so the value written back keeps the shape
+the firmware expects. A section is sent whole because the firmware replaces what
+it is given and defaults anything left out, and what the recorder stored is read
+back afterwards — it clamps values it dislikes without saying so.
+
+Network sections are deliberately not exposed yet: a wrong value in
+`NetWork.NetCommon` takes the recorder off the network.
+
 **Configuration** — the recorder's whole configuration tree, read section by
-section. Useful for finding a section name for `xmeye.get_config`.
+section. This stays as the raw browser: it reaches every section the firmware
+has, which is right for digging and wrong for changing a setting on purpose.
 
 **Log** — the recorder's own system log.
 

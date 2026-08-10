@@ -62,6 +62,109 @@ const ISSUE_URL = "https://github.com/Moxnatiy/hass-xmeye/issues/new";
 //: travel through the clipboard instead of the URL.
 const ISSUE_URL_LIMIT = 6000;
 
+//: Recorder settings, in the shape the vendor apps present them.
+//:
+//: Declared rather than hand-built: every field says what it is, so one renderer
+//: covers all of them and adding a section is a data change, not new markup.
+//:
+//: Network sections are deliberately absent for now. A wrong value in
+//: NetWork.NetCommon takes the recorder off the network, and that is not
+//: something to ship before the safe sections have proven the write path.
+const SETTINGS_GROUPS = [
+  {
+    id: "general",
+    title: "Загальні",
+    section: "General.General",
+    hint: "Назва пристрою та поведінка при заповненому диску.",
+    fields: [
+      { key: "MachineName", label: "Назва пристрою", type: "text" },
+      {
+        key: "OverWrite",
+        label: "Коли диск заповнений",
+        type: "select",
+        options: [
+          ["OverWrite", "Перезаписувати найстаріше"],
+          ["StopRecord", "Зупинити запис"],
+        ],
+      },
+      { key: "AutoLogout", label: "Автовихід з меню, хв", type: "number", min: 0, max: 120,
+        hint: "0 — не виходити" },
+      { key: "ScreenSaveTime", label: "Заставка, хв", type: "number", min: 0, max: 120 },
+      { key: "BandWidthTips", label: "Підказка про смугу", type: "bool01" },
+    ],
+  },
+  {
+    id: "locale",
+    title: "Час і мова",
+    section: "General.Location",
+    hint: "Формат дати й часу, мова меню самого реєстратора.",
+    fields: [
+      {
+        key: "Language",
+        label: "Мова меню",
+        type: "select",
+        options: [
+          ["English", "English"],
+          ["Russian", "Русский"],
+          ["SimpChinese", "简体中文"],
+        ],
+      },
+      {
+        key: "DateFormat",
+        label: "Формат дати",
+        type: "select",
+        options: [["YYMMDD", "РР-ММ-ДД"], ["MMDDYY", "ММ-ДД-РР"], ["DDMMYY", "ДД-ММ-РР"]],
+      },
+      {
+        key: "DateSeparator",
+        label: "Роздільник дати",
+        type: "select",
+        options: [["-", "-"], ["/", "/"], [".", "."]],
+      },
+      {
+        key: "TimeFormat",
+        label: "Формат часу",
+        type: "select",
+        options: [["24", "24 години"], ["12", "12 годин"]],
+      },
+      {
+        key: "DSTRule",
+        label: "Літній час",
+        type: "select",
+        options: [["Off", "Вимкнено"], ["On", "Увімкнено"]],
+      },
+    ],
+  },
+  {
+    id: "maintain",
+    title: "Обслуговування",
+    section: "General.AutoMaintain",
+    hint: "Плановий перезапуск і автовидалення старих записів.",
+    fields: [
+      {
+        key: "AutoRebootDay",
+        label: "Перезапуск",
+        type: "select",
+        options: [
+          ["Never", "Ніколи"],
+          ["Everyday", "Щодня"],
+          ["Sunday", "Щонеділі"],
+          ["Monday", "Щопонеділка"],
+        ],
+      },
+      { key: "AutoRebootHour", label: "Година перезапуску", type: "number", min: 0, max: 23 },
+      {
+        key: "AutoDeleteFilesDays",
+        label: "Видаляти записи, старші за (днів)",
+        type: "number",
+        min: 0,
+        max: 365,
+        hint: "0 — не видаляти за віком",
+      },
+    ],
+  },
+];
+
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
 
@@ -182,6 +285,13 @@ class XmeyePanel extends HTMLElement {
     this._log = null;
     //: The rendered developer report, once it has been gathered.
     this._report = null;
+    //: Recorder settings: which group is open, what was read, and what the user
+    //: has edited but not yet written.
+    this._settingsGroup = SETTINGS_GROUPS[0].id;
+    this._settings = null;
+    this._settingsEdits = {};
+    this._settingsSaving = false;
+    this._settingsNote = null;
     this._error = null;
     this._loading = true;
     this._timer = null;
@@ -632,6 +742,7 @@ class XmeyePanel extends HTMLElement {
       archive: this._archive(),
       config: this._config(),
       log: this._logView(),
+      settings: this._settingsView(),
       debug: this._debugView(),
     };
     return this._shell(tabs[this._tab] || tabs.overview);
@@ -644,6 +755,7 @@ class XmeyePanel extends HTMLElement {
       ["channels", "Канали"],
       ["archive", "Архів"],
       ["config", "Конфігурація"],
+      ["settings", "Налаштування"],
       ["log", "Журнал"],
       ["debug", "Звіт"],
     ];
@@ -1488,6 +1600,160 @@ class XmeyePanel extends HTMLElement {
     this._render();
   }
 
+  /**
+   * Recorder settings, the way the vendor apps show them.
+   *
+   * The raw configuration browser stays where it is: it exposes every section
+   * the firmware has, which is right for digging but wrong for changing a
+   * setting on purpose. Here each field is declared with its type and its
+   * allowed values, so what reaches the recorder is a value it recognises.
+   *
+   * The firmware only accepts a section as a whole, so editing merges into the
+   * copy that was read and sends all of it back.
+   */
+  _settingsView() {
+    const group =
+      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
+
+    const menu = SETTINGS_GROUPS.map(
+      (g) =>
+        `<button class="leaf ${g.id === group.id ? "active" : ""}" data-group="${g.id}">
+           ${g.title}
+         </button>`
+    ).join("");
+
+    let body;
+    if (!this._settings || this._settings.section !== group.section) {
+      body = `<div class="empty">Читаю налаштування…</div>`;
+    } else if (this._settings.error) {
+      body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
+    } else {
+      const value = this._settings.value || {};
+      const rows = group.fields
+        .map((field) => {
+          const current =
+            field.key in this._settingsEdits ? this._settingsEdits[field.key] : value[field.key];
+          return `
+            <div class="setting">
+              <label for="set-${field.key}">${field.label}</label>
+              ${this._settingInput(field, current)}
+              ${field.hint ? `<div class="hint">${field.hint}</div>` : ""}
+            </div>`;
+        })
+        .join("");
+      const dirty = Object.keys(this._settingsEdits).length;
+      body = `
+        ${group.hint ? `<p class="hint pad">${group.hint}</p>` : ""}
+        <div class="settings-form">${rows}</div>
+        <div class="toolbar">
+          <button class="primary" id="savesettings" ${dirty && !this._settingsSaving ? "" : "disabled"}>
+            ${this._settingsSaving ? "Зберігаю…" : dirty ? `Зберегти (${dirty})` : "Змін немає"}
+          </button>
+          <button class="ghost" id="resetsettings" ${dirty ? "" : "disabled"}>Скинути</button>
+          ${this._settingsNote ? `<span class="hint">${escapeHtml(this._settingsNote)}</span>` : ""}
+        </div>`;
+    }
+
+    return `
+      <div class="split">
+        <aside class="tree">${menu}</aside>
+        <section class="viewer">
+          <div class="viewer-head">${group.title} <span class="hint">${group.section}</span></div>
+          <div class="viewer-body">${body}</div>
+        </section>
+      </div>`;
+  }
+
+  /** One input, chosen by the field's declared type. */
+  _settingInput(field, current) {
+    const id = `set-${field.key}`;
+    if (field.type === "select") {
+      const options = field.options
+        .map(
+          ([key, label]) =>
+            `<option value="${escapeHtml(String(key))}" ${
+              String(current) === String(key) ? "selected" : ""
+            }>${escapeHtml(label)}</option>`
+        )
+        .join("");
+      return `<select id="${id}" data-field="${field.key}">${options}</select>`;
+    }
+    if (field.type === "number") {
+      return `<input type="number" id="${id}" data-field="${field.key}"
+                     min="${field.min ?? 0}" max="${field.max ?? 9999}"
+                     value="${current ?? 0}">`;
+    }
+    if (field.type === "bool01" || field.type === "bool") {
+      // Some fields are real booleans, others are 0/1 integers; the type says
+      // which, so the value written back keeps the shape the firmware expects.
+      const on = field.type === "bool" ? current === true : Number(current) === 1;
+      return `<input type="checkbox" id="${id}" data-field="${field.key}" ${on ? "checked" : ""}>`;
+    }
+    return `<input type="text" id="${id}" data-field="${field.key}"
+                   value="${escapeHtml(String(current ?? ""))}">`;
+  }
+
+  /** Update the save button without redrawing the form under the cursor. */
+  _refreshSettingsToolbar() {
+    const save = this.shadowRoot.getElementById("savesettings");
+    const reset = this.shadowRoot.getElementById("resetsettings");
+    const dirty = Object.keys(this._settingsEdits).length;
+    if (save) {
+      save.disabled = !dirty || this._settingsSaving;
+      save.textContent = dirty ? `Зберегти (${dirty})` : "Змін немає";
+    }
+    if (reset) reset.disabled = !dirty;
+  }
+
+  async _loadSettings() {
+    const group =
+      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
+    this._settings = { section: group.section, loading: true };
+    this._settingsEdits = {};
+    this._settingsNote = null;
+    this._render();
+    try {
+      const reply = await this._ws({
+        type: "xmeye/config",
+        entry_id: this._entryId,
+        section: group.section,
+      });
+      this._settings = { section: group.section, value: reply.value };
+    } catch (err) {
+      this._settings = { section: group.section, error: err.message || String(err) };
+    }
+    this._render();
+  }
+
+  async _saveSettings() {
+    const group =
+      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
+    if (!this._settings || !this._settings.value) return;
+    this._settingsSaving = true;
+    this._render();
+
+    // Send the section whole, with the edits merged in: the firmware replaces
+    // whatever it is given and defaults the fields left out.
+    const merged = { ...this._settings.value, ...this._settingsEdits };
+    try {
+      const reply = await this._ws({
+        type: "xmeye/config_set",
+        entry_id: this._entryId,
+        section: group.section,
+        value: merged,
+      });
+      // Show what the recorder stored, not what we asked for: it clamps values
+      // it dislikes without saying so.
+      this._settings = { section: group.section, value: reply.value };
+      this._settingsEdits = {};
+      this._settingsNote = "Збережено";
+    } catch (err) {
+      this._settingsNote = `Не вдалося зберегти: ${err.message || err}`;
+    }
+    this._settingsSaving = false;
+    this._render();
+  }
+
   _logView() {
     const log = this._log;
     if (!log) return `<div class="empty"><button class="primary" id="loadlog">Прочитати журнал</button></div>`;
@@ -1777,6 +2043,12 @@ class XmeyePanel extends HTMLElement {
     root.querySelectorAll(".tab").forEach((el) =>
       el.addEventListener("click", () => {
         this._tab = el.dataset.tab;
+        // The settings form has nothing to show until the section is read, so
+        // opening the tab starts that rather than waiting for another click.
+        if (this._tab === "settings" && !this._settings) {
+          this._loadSettings();
+          return;
+        }
         this._render();
       })
     );
@@ -1954,6 +2226,44 @@ class XmeyePanel extends HTMLElement {
         this._remountLive();
       });
 
+    root.querySelectorAll("[data-group]").forEach((button) =>
+      button.addEventListener("click", () => {
+        this._settingsGroup = button.dataset.group;
+        this._loadSettings();
+      })
+    );
+
+    root.querySelectorAll("[data-field]").forEach((input) =>
+      input.addEventListener("change", () => {
+        const field = SETTINGS_GROUPS.flatMap((g) => g.fields).find(
+          (f) => f.key === input.dataset.field
+        );
+        let value;
+        if (input.type === "checkbox") {
+          value = field && field.type === "bool" ? input.checked : input.checked ? 1 : 0;
+        } else if (input.type === "number") {
+          value = Number(input.value);
+        } else {
+          value = input.value;
+        }
+        this._settingsEdits[input.dataset.field] = value;
+        // Only the toolbar changes, so the form is left alone and the field
+        // being edited keeps focus.
+        this._refreshSettingsToolbar();
+      })
+    );
+
+    const saveSettings = root.getElementById("savesettings");
+    if (saveSettings) saveSettings.addEventListener("click", () => this._saveSettings());
+
+    const resetSettings = root.getElementById("resetsettings");
+    if (resetSettings)
+      resetSettings.addEventListener("click", () => {
+        this._settingsEdits = {};
+        this._settingsNote = null;
+        this._render();
+      });
+
     const buildReport = root.getElementById("buildreport");
     if (buildReport)
       buildReport.addEventListener("click", () => {
@@ -2098,6 +2408,14 @@ const STYLES = `
   .picker-head { padding:7px 10px; font-size:11px; text-transform:uppercase;
     letter-spacing:.4px; color: var(--secondary-text-color);
     border-bottom:1px solid var(--divider-color); }
+  .settings-form { display:grid; gap:14px; padding:4px 0 12px; max-width:520px; }
+  .setting { display:grid; gap:4px; }
+  .setting label { font-size:13px; color: var(--secondary-text-color); }
+  .setting input[type=text], .setting input[type=number], .setting select {
+    padding:6px 8px; border-radius:6px; border:1px solid var(--divider-color);
+    background: var(--card-background-color); color: var(--primary-text-color); }
+  .setting input[type=checkbox] { width:18px; height:18px; }
+  .viewer-body { padding:12px 14px; }
   .report { max-height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-word;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;
     background: var(--secondary-background-color); padding:12px; border-radius:8px; }

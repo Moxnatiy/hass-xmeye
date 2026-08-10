@@ -56,8 +56,47 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_recordings)
     websocket_api.async_register_command(hass, ws_config_tree)
     websocket_api.async_register_command(hass, ws_config_get)
+    websocket_api.async_register_command(hass, ws_config_set)
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_report)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/config_set",
+        vol.Required("entry_id"): str,
+        vol.Required("section"): str,
+        vol.Required("value"): vol.Any(dict, list),
+    }
+)
+@websocket_api.async_response
+async def ws_config_set(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Write one configuration section back to the recorder.
+
+    The firmware only accepts a section whole, so the panel edits a copy of what
+    it read and sends all of it back. The written value is read again and
+    returned, because a recorder will quietly clamp or ignore a field it does
+    not like and the interface should show what actually stuck rather than what
+    was asked for.
+    """
+    coordinator = _require(hass, msg["entry_id"])
+    section = msg["section"]
+    try:
+        async with coordinator.lock:
+            await coordinator.client.set_config(section, msg["value"])
+            stored = await coordinator.client.get_config(section, check=False)
+    except XmeyeError as err:
+        connection.send_error(msg["id"], "write_failed", str(err))
+        return
+
+    # Settings like the channel titles or the recording mode change what the
+    # entities report, so the next poll should not wait out the interval.
+    await coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"section": section, "value": stored})
 
 
 @websocket_api.websocket_command(
