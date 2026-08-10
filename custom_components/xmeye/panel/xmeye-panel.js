@@ -54,6 +54,14 @@ const PLAYERS = [
   ["mjpeg", "Стоп-кадри"],
 ];
 
+//: Where a report goes when the user chooses to file it. Nothing is sent
+//: automatically: this only opens a prefilled issue form for them to submit.
+const ISSUE_URL = "https://github.com/Moxnatiy/hass-xmeye/issues/new";
+
+//: Past roughly this, GitHub drops the querystring, so a long report has to
+//: travel through the clipboard instead of the URL.
+const ISSUE_URL_LIMIT = 6000;
+
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
 
@@ -172,6 +180,8 @@ class XmeyePanel extends HTMLElement {
     this._configSection = null;
     this._configValue = null;
     this._log = null;
+    //: The rendered developer report, once it has been gathered.
+    this._report = null;
     this._error = null;
     this._loading = true;
     this._timer = null;
@@ -622,6 +632,7 @@ class XmeyePanel extends HTMLElement {
       archive: this._archive(),
       config: this._config(),
       log: this._logView(),
+      debug: this._debugView(),
     };
     return this._shell(tabs[this._tab] || tabs.overview);
   }
@@ -634,6 +645,7 @@ class XmeyePanel extends HTMLElement {
       ["archive", "Архів"],
       ["config", "Конфігурація"],
       ["log", "Журнал"],
+      ["debug", "Звіт"],
     ];
     const picker =
       this._devices.length > 1
@@ -1413,6 +1425,69 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
+  /**
+   * The developer report.
+   *
+   * These recorders differ from one another in ways no document lists, so a
+   * report saying only "it does not work" costs several rounds of questions.
+   * One button gathers the model, the firmware, the capability map that decides
+   * what is supported at all, the encoder settings and what the browser's
+   * decoder did, then hands it over as Markdown ready for an issue.
+   *
+   * Nothing leaves the browser by itself: the user copies, downloads, or opens
+   * a prefilled issue. Secrets are stripped on the server before the report is
+   * ever sent here.
+   */
+  _debugView() {
+    if (!this._report) {
+      return `
+        <div class="card">
+          <h2>Звіт для розробника</h2>
+          <p class="hint pad">
+            Збирає модель, прошивку, перелік можливостей реєстратора, налаштування
+            кодування та стан програвача — те, що потрібно, щоб зрозуміти поведінку
+            саме вашого пристрою.
+          </p>
+          <p class="hint pad">
+            Паролі, хеші, серійні номери, MAC- та IP-адреси вирізаються автоматично.
+            Звіт нікуди не надсилається сам — ви його копіюєте або відкриваєте issue.
+          </p>
+          <button class="primary" id="buildreport">Зібрати звіт</button>
+        </div>`;
+    }
+    return `
+      <div class="card">
+        <div class="toolbar">
+          <button class="primary" id="copyreport">Копіювати</button>
+          <button class="ghost" id="downloadreport">Завантажити .md</button>
+          <button class="ghost" id="issuereport">Створити issue на GitHub</button>
+          <button class="ghost" id="buildreport">Оновити</button>
+        </div>
+        <pre class="report">${escapeHtml(this._report)}</pre>
+      </div>`;
+  }
+
+  /** Gather the report: recorder facts from the server, player facts from here. */
+  async _buildReport() {
+    try {
+      const reply = await this._ws({ type: "xmeye/report", entry_id: this._entryId });
+      // The recorder side arrives ready-rendered; only what the browser knows
+      // about its own decoder has to be appended here.
+      this._report = [
+        reply.markdown,
+        "",
+        "### Browser and player",
+        "",
+        "```",
+        this._diagText(),
+        "```",
+      ].join("\n");
+    } catch (err) {
+      this._report = `Не вдалося зібрати звіт: ${err.message || err}`;
+    }
+    this._render();
+  }
+
   _logView() {
     const log = this._log;
     if (!log) return `<div class="empty"><button class="primary" id="loadlog">Прочитати журнал</button></div>`;
@@ -1879,6 +1954,64 @@ class XmeyePanel extends HTMLElement {
         this._remountLive();
       });
 
+    const buildReport = root.getElementById("buildreport");
+    if (buildReport)
+      buildReport.addEventListener("click", () => {
+        buildReport.textContent = "Збираю…";
+        buildReport.disabled = true;
+        this._buildReport();
+      });
+
+    const copyReport = root.getElementById("copyreport");
+    if (copyReport)
+      copyReport.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(this._report || "");
+          copyReport.textContent = "Скопійовано";
+          setTimeout(() => (copyReport.textContent = "Копіювати"), 2000);
+        } catch (err) {
+          copyReport.textContent = "Не вдалося";
+        }
+      });
+
+    const downloadReport = root.getElementById("downloadreport");
+    if (downloadReport)
+      downloadReport.addEventListener("click", () => {
+        const blob = new Blob([this._report || ""], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+        link.href = url;
+        link.download = `xmeye-report-${stamp}.md`;
+        link.click();
+        // Revoking at once can beat the download in some browsers.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      });
+
+    const issueReport = root.getElementById("issuereport");
+    if (issueReport)
+      issueReport.addEventListener("click", async () => {
+        const report = this._report || "";
+        const model =
+          (this._detail && this._detail.device && this._detail.device.model) || "recorder";
+        const base = `${ISSUE_URL}?title=${encodeURIComponent(`[${model}] `)}`;
+        // GitHub truncates a long querystring, and a silently cut report is
+        // worse than none: past the limit the body only asks for a paste and the
+        // report travels through the clipboard instead.
+        const withBody = `${base}&body=${encodeURIComponent(report)}`;
+        if (withBody.length < ISSUE_URL_LIMIT) {
+          window.open(withBody, "_blank", "noopener");
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(report);
+        } catch (err) {
+          /* the report stays on screen to copy by hand */
+        }
+        const hint = "Звіт скопійовано в буфер — вставте його сюди.";
+        window.open(`${base}&body=${encodeURIComponent(hint)}`, "_blank", "noopener");
+      });
+
     const copyDiag = root.getElementById("copydiag");
     if (copyDiag)
       copyDiag.addEventListener("click", async () => {
@@ -1965,6 +2098,9 @@ const STYLES = `
   .picker-head { padding:7px 10px; font-size:11px; text-transform:uppercase;
     letter-spacing:.4px; color: var(--secondary-text-color);
     border-bottom:1px solid var(--divider-color); }
+  .report { max-height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-word;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;
+    background: var(--secondary-background-color); padding:12px; border-radius:8px; }
   .pick-list { list-style:none; margin:0; padding:3px 0; max-height:70vh; overflow:auto; }
   .pick { display:flex; align-items:center; gap:5px; padding:1px 7px; font-size:12px;
     line-height:1.7; }

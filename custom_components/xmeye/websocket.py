@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import platform
 from datetime import datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
@@ -22,6 +24,7 @@ from .const import (
     STREAM_SUB,
 )
 from .coordinator import XmeyeCoordinator
+from .report import enabled_capabilities, format_report, redact
 from .xmeyelib import XmeyeError
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +57,91 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_config_tree)
     websocket_api.async_register_command(hass, ws_config_get)
     websocket_api.async_register_command(hass, ws_log)
+    websocket_api.async_register_command(hass, ws_report)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/report",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_report(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Everything a bug report needs, gathered in one call and redacted.
+
+    These recorders differ from each other in ways no document lists, so a
+    report saying only "it does not work" costs several rounds of questions.
+    This collects the model, the firmware, the capability map that actually
+    decides what is supported, and the encoder settings — the things that
+    explain the difference between two devices.
+    """
+    coordinator = _require(hass, msg["entry_id"])
+    data = coordinator.data
+    entry = coordinator.config_entry
+
+    encode: Any
+    try:
+        async with coordinator.lock:
+            encode = await coordinator.client.get_config("Simplify.Encode", check=False)
+    except XmeyeError as err:
+        encode = {"error": str(err)}
+
+    integration_version = "unknown"
+    try:
+        from homeassistant.loader import async_get_integration
+
+        integration = await async_get_integration(hass, DOMAIN)
+        integration_version = str(integration.version)
+    except Exception:  # noqa: BLE001 - a missing version must not sink the report
+        _LOGGER.debug("Could not read the integration version", exc_info=True)
+
+    channels = [
+        {
+            "index": status.index,
+            "status": status.status,
+            "resolution": status.current_resolution,
+            "max_resolution": status.max_resolution,
+            "bitrate": data.bitrate(status.index),
+            "recording": data.is_recording(status.index),
+        }
+        for status in (data.channels if data else [])
+        if status.configured
+    ]
+
+    report = {
+        "environment": {
+            "integration_version": integration_version,
+            "homeassistant_version": HA_VERSION,
+            "python_version": platform.python_version(),
+        },
+        "device": {
+            "model": data.device.hardware if data else None,
+            "firmware": data.device.software_version if data else None,
+            "build_time": _iso(data.device.build_time) if data else None,
+            "device_type": (coordinator.client.login_info or {}).get("DeviceType "),
+            "channels": data.device.channels if data else None,
+            "supports_talk": data.device.supports_talk if data else None,
+        },
+        "health": {
+            "last_update_success": coordinator.last_update_success,
+            "reconnects": coordinator.client.reconnects,
+            "update_interval": str(coordinator.update_interval),
+            "enabled_channels": coordinator.enabled_channels,
+        },
+        "options": dict(entry.options),
+        "channels": channels,
+        "capabilities_enabled": enabled_capabilities(data.capabilities if data else {}),
+        "encode": encode,
+    }
+    clean = redact(report)
+    # The Markdown is rendered here rather than in the panel: the formatter is
+    # unit tested, and one implementation cannot drift from another.
+    connection.send_result(msg["id"], {"data": clean, "markdown": format_report(clean)})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/devices"})
