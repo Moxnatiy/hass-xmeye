@@ -5,6 +5,7 @@
 ```
 src/xmeye/                     the protocol library, the source of truth
 custom_components/xmeye/       the Home Assistant integration
+  brand/                       icon.png and icon@2x.png, served by HA itself
   panel/                       the panel (plain ES modules, no build step)
   xmeyelib/                    a vendored copy of src/xmeye, kept in sync
 docs/                          this documentation
@@ -113,6 +114,15 @@ The panel is an ES module, and browsers cache it hard. The integration appends
 a version stamp taken from the file's mtime to the module URL, and the module
 passes it on to its siblings. If you edit the panel and see no change, check
 that stamp before looking anywhere else.
+
+## Brand images
+
+`custom_components/xmeye/brand/` holds `icon.png` (256x256) and `icon@2x.png`
+(512x512). Since Home Assistant 2026.3 a custom integration ships its own brand
+images this way, and they take priority over the CDN — the
+`home-assistant/brands` repository no longer accepts custom integrations. Dark
+variants (`dark_icon.png`) and logos (`logo.png`) are supported by the same
+mechanism if they are ever wanted. No manifest entry is needed.
 
 ## Conventions
 
