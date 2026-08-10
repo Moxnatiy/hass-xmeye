@@ -163,6 +163,103 @@ const SETTINGS_GROUPS = [
       },
     ],
   },
+  {
+    id: "screen",
+    title: "Екран і OSD",
+    section: "fVideo.GUISet",
+    hint: "Що реєстратор малює поверх відео на власному моніторі.",
+    fields: [
+      { key: "ChannelTitleEnable", label: "Назва каналу", type: "bool" },
+      { key: "TimeTitleEnable", label: "Час", type: "bool" },
+      { key: "RecordStateEnable", label: "Значок запису", type: "bool" },
+      { key: "AlarmStateEnable", label: "Значок тривоги", type: "bool" },
+      { key: "ChanStateBitRateEnable", label: "Бітрейт каналу", type: "bool" },
+      { key: "ChanStateMtdEnable", label: "Значок руху", type: "bool" },
+      { key: "ChanStateVlsEnable", label: "Значок втрати відео", type: "bool" },
+      { key: "ChanWindowGridEnable", label: "Сітка вікон", type: "bool" },
+      { key: "QRcodeEnable", label: "QR-код", type: "bool" },
+      { key: "Deflick", label: "Придушення мерехтіння", type: "bool" },
+      { key: "WindowAlpha", label: "Прозорість накладок", type: "number", min: 0, max: 255 },
+    ],
+  },
+  {
+    id: "disk-low",
+    title: "Диск — мало місця",
+    section: "Storage.StorageLowSpace",
+    hint: "Що робити, коли на диску лишається мало вільного місця.",
+    fields: [
+      { key: "Enable", label: "Стежити за вільним місцем", type: "bool" },
+      { key: "LowerLimit", label: "Поріг, % вільного", type: "number", min: 1, max: 99 },
+      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+    ],
+  },
+  {
+    id: "disk-fail",
+    title: "Диск — помилка",
+    section: "Storage.StorageFailure",
+    hint: "Реакція на помилку диска.",
+    fields: [
+      { key: "Enable", label: "Стежити за помилками", type: "bool" },
+      { key: "RebootEnable", label: "Перезавантажувати при помилці", type: "bool" },
+      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+    ],
+  },
+  {
+    id: "disk-none",
+    title: "Диск — відсутній",
+    section: "Storage.StorageNotExist",
+    hint: "Реакція на відсутній диск.",
+    fields: [
+      { key: "Enable", label: "Стежити", type: "bool" },
+      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+    ],
+  },
+  {
+    id: "network",
+    title: "Мережа",
+    section: "NetWork.NetCommon",
+    //: The address fields are not here on purpose. HostIP, GateWay and Submask
+    //: are little-endian hex, and a wrong one takes the recorder off the network
+    //: with no way back through this panel.
+    warning:
+      "Зміна портів розірве поточне з'єднання: після збереження оновіть порт у налаштуваннях інтеграції. IP, шлюз і маску тут навмисно не редагуються.",
+    fields: [
+      { key: "HostName", label: "Мережеве ім'я", type: "text" },
+      { key: "HttpPort", label: "HTTP-порт", type: "number", min: 1, max: 65535 },
+      { key: "TCPPort", label: "DVRIP-порт", type: "number", min: 1, max: 65535,
+        hint: "Порт, яким користується ця інтеграція" },
+      { key: "UDPPort", label: "UDP-порт", type: "number", min: 1, max: 65535 },
+      { key: "TCPMaxConn", label: "Макс. одночасних з'єднань", type: "number", min: 4, max: 32 },
+      { key: "MaxBps", label: "Обмеження смуги, кбіт/с", type: "number", min: 0, max: 100000,
+        hint: "0 — без обмеження" },
+      { key: "MonMode", label: "Транспорт перегляду", type: "select",
+        options: [["TCP", "TCP"], ["UDP", "UDP"]] },
+      { key: "TransferPlan", label: "Пріоритет передачі", type: "text",
+        hint: "Значення таке саме, як у меню самого реєстратора" },
+      { key: "UseHSDownLoad", label: "Швидке завантаження", type: "bool" },
+    ],
+  },
+  {
+    id: "ntp",
+    title: "Час із мережі (NTP)",
+    section: "NetWork.NetNTP",
+    hint: "Синхронізація годинника реєстратора з сервером часу.",
+    fields: [
+      { key: "Enable", label: "Увімкнути NTP", type: "bool" },
+      { key: "Server.Name", label: "Сервер", type: "text" },
+      { key: "Server.Port", label: "Порт", type: "number", min: 1, max: 65535 },
+      { key: "TimeZone", label: "Часовий пояс (індекс)", type: "number", min: 0, max: 40 },
+      { key: "UpdatePeriod", label: "Період оновлення, хв", type: "number", min: 1, max: 1440 },
+    ],
+  },
 ];
 
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
@@ -1632,7 +1729,9 @@ class XmeyePanel extends HTMLElement {
       const rows = group.fields
         .map((field) => {
           const current =
-            field.key in this._settingsEdits ? this._settingsEdits[field.key] : value[field.key];
+            field.key in this._settingsEdits
+              ? this._settingsEdits[field.key]
+              : this._settingRead(value, field.key);
           return `
             <div class="setting">
               <label for="set-${field.key}">${field.label}</label>
@@ -1643,6 +1742,7 @@ class XmeyePanel extends HTMLElement {
         .join("");
       const dirty = Object.keys(this._settingsEdits).length;
       body = `
+        ${group.warning ? `<p class="warn">${group.warning}</p>` : ""}
         ${group.hint ? `<p class="hint pad">${group.hint}</p>` : ""}
         <div class="settings-form">${rows}</div>
         <div class="toolbar">
@@ -1664,9 +1764,35 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
+  /**
+   * Read a field that may live inside a nested object.
+   *
+   * Several sections keep the interesting flags one level down —
+   * ``EventHandler.BeepEnable``, ``Server.Port`` — so a field key is a path
+   * rather than a plain name.
+   */
+  _settingRead(source, path) {
+    return path.split(".").reduce((node, part) => (node == null ? node : node[part]), source);
+  }
+
+  /** Write a dotted path into a copy, leaving the rest of the section intact. */
+  _settingWrite(target, path, value) {
+    const parts = path.split(".");
+    const last = parts.pop();
+    let node = target;
+    for (const part of parts) {
+      // Copy on the way down: the section read from the recorder is the record
+      // of what is actually stored and must not be mutated by editing.
+      node[part] = { ...(node[part] || {}) };
+      node = node[part];
+    }
+    node[last] = value;
+    return target;
+  }
+
   /** One input, chosen by the field's declared type. */
   _settingInput(field, current) {
-    const id = `set-${field.key}`;
+    const id = `set-${field.key.replace(/\./g, "-")}`;
     if (field.type === "select") {
       const options = field.options
         .map(
@@ -1734,7 +1860,10 @@ class XmeyePanel extends HTMLElement {
 
     // Send the section whole, with the edits merged in: the firmware replaces
     // whatever it is given and defaults the fields left out.
-    const merged = { ...this._settings.value, ...this._settingsEdits };
+    const merged = { ...this._settings.value };
+    for (const [path, value] of Object.entries(this._settingsEdits)) {
+      this._settingWrite(merged, path, value);
+    }
     try {
       const reply = await this._ws({
         type: "xmeye/config_set",
@@ -2408,6 +2537,10 @@ const STYLES = `
   .picker-head { padding:7px 10px; font-size:11px; text-transform:uppercase;
     letter-spacing:.4px; color: var(--secondary-text-color);
     border-bottom:1px solid var(--divider-color); }
+  .warn { margin:0 0 10px; padding:9px 12px; border-radius:8px; font-size:13px;
+    color: var(--primary-text-color);
+    background: color-mix(in srgb, var(--warning-color, #ff9800) 18%, transparent);
+    border:1px solid var(--warning-color, #ff9800); }
   .settings-form { display:grid; gap:14px; padding:4px 0 12px; max-width:520px; }
   .setting { display:grid; gap:4px; }
   .setting label { font-size:13px; color: var(--secondary-text-color); }

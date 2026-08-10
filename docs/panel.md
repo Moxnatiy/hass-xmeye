@@ -25,8 +25,14 @@ the firmware expects. A section is sent whole because the firmware replaces what
 it is given and defaults anything left out, and what the recorder stored is read
 back afterwards — it clamps values it dislikes without saying so.
 
-Network sections are deliberately not exposed yet: a wrong value in
-`NetWork.NetCommon` takes the recorder off the network.
+Field keys are paths, so a flag one level down — `EventHandler.BeepEnable`,
+`Server.Port` — is edited like any other, and the merge copies its way down
+rather than mutating what was read.
+
+The network group carries a warning: changing a port drops the current
+connection, and the integration then needs the new port. `HostIP`, `GateWay`
+and `Submask` are deliberately absent — they are little-endian hex, and a wrong
+value takes the recorder off the network with no way back through this panel.
 
 **Configuration** — the recorder's whole configuration tree, read section by
 section. This stays as the raw browser: it reaches every section the firmware
