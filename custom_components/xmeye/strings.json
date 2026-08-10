@@ -34,14 +34,19 @@
         "title": "XMeye options",
         "data": {
           "channels": "Channels to expose",
-          "stream": "Live stream",
+          "stream": "Camera stream",
           "snapshot_stream": "Snapshot stream",
+          "default_player": "Panel player",
+          "default_live_stream": "Panel live stream",
           "scan_interval": "Update interval",
+          "max_connections": "Max device connections (TCPMaxConn)",
           "use_rtsp": "Use RTSP for live video",
           "enable_panel": "Show the XMeye sidebar panel"
         },
         "data_description": {
           "stream": "The sub stream is far lighter to transcode; the main stream is 4K.",
+          "default_player": "Which player the panel opens with. Native (WebCodecs) has the lowest latency.",
+          "max_connections": "Written to the recorder. It caps how many streams run at once; raising it above 10 is not honoured by every firmware.",
           "use_rtsp": "Turn off only if RTSP is disabled on the recorder."
         }
       }
@@ -50,6 +55,9 @@
   "selector": {
     "stream": {
       "options": { "main": "Main stream", "sub": "Sub stream" }
+    },
+    "player": {
+      "options": { "native": "Native (WebCodecs)", "hls": "HLS", "mjpeg": "Snapshots" }
     }
   },
   "entity": {

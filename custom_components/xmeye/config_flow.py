@@ -35,7 +35,10 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_CHANNELS,
+    CONF_DEFAULT_LIVE_STREAM,
+    CONF_DEFAULT_PLAYER,
     CONF_ENABLE_PANEL,
+    CONF_MAX_CONNECTIONS,
     CONF_RTSP_PORT,
     CONF_SCAN_INTERVAL,
     CONF_SNAPSHOT_STREAM,
@@ -46,8 +49,12 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_USERNAME,
     DOMAIN,
+    MAX_MAX_CONNECTIONS,
     MAX_SCAN_INTERVAL,
+    MIN_MAX_CONNECTIONS,
     MIN_SCAN_INTERVAL,
+    PLAYER_NATIVE,
+    PLAYER_OPTIONS,
     STREAM_MAIN,
     STREAM_SUB,
 )
@@ -200,21 +207,34 @@ class XmeyeOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         entry = self.config_entry
+        coordinator = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
+
         if user_input is not None:
+            # TCPMaxConn lives on the recorder, not in the entry. Only write it
+            # back when it actually changed, and never let a failed write block
+            # saving the rest of the options.
+            wanted = int(user_input[CONF_MAX_CONNECTIONS])
+            if coordinator is not None and wanted != await self._current_max_connections(
+                coordinator
+            ):
+                await self._write_max_connections(coordinator, wanted)
             return self.async_create_entry(
                 data={
                     CONF_CHANNELS: [int(c) for c in user_input[CONF_CHANNELS]],
                     CONF_STREAM: user_input[CONF_STREAM],
                     CONF_SNAPSHOT_STREAM: user_input[CONF_SNAPSHOT_STREAM],
+                    CONF_DEFAULT_PLAYER: user_input[CONF_DEFAULT_PLAYER],
+                    CONF_DEFAULT_LIVE_STREAM: user_input[CONF_DEFAULT_LIVE_STREAM],
                     CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
                     CONF_USE_RTSP: user_input[CONF_USE_RTSP],
                     CONF_ENABLE_PANEL: user_input[CONF_ENABLE_PANEL],
+                    CONF_MAX_CONNECTIONS: wanted,
                 }
             )
 
-        coordinator = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
         channel_options = self._channel_options(coordinator)
         options = entry.options
+        current_max = await self._current_max_connections(coordinator)
 
         schema = vol.Schema(
             {
@@ -246,6 +266,24 @@ class XmeyeOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
+                    CONF_DEFAULT_PLAYER,
+                    default=options.get(CONF_DEFAULT_PLAYER, PLAYER_NATIVE),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=PLAYER_OPTIONS,
+                        translation_key="player",
+                    )
+                ),
+                vol.Required(
+                    CONF_DEFAULT_LIVE_STREAM,
+                    default=options.get(CONF_DEFAULT_LIVE_STREAM, STREAM_SUB),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[STREAM_MAIN, STREAM_SUB],
+                        translation_key="stream",
+                    )
+                ),
+                vol.Required(
                     CONF_SCAN_INTERVAL,
                     default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
                 ): NumberSelector(
@@ -258,6 +296,16 @@ class XmeyeOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
+                    CONF_MAX_CONNECTIONS, default=current_max
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_CONNECTIONS,
+                        max=MAX_MAX_CONNECTIONS,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
                     CONF_USE_RTSP, default=options.get(CONF_USE_RTSP, True)
                 ): BooleanSelector(),
                 vol.Required(
@@ -266,6 +314,32 @@ class XmeyeOptionsFlow(OptionsFlow):
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
+
+    async def _current_max_connections(self, coordinator: Any) -> int:
+        """Read TCPMaxConn from the recorder, falling back to the default."""
+        if coordinator is None:
+            return 10
+        try:
+            async with coordinator.lock:
+                net = await coordinator.client.get_config("NetWork.NetCommon")
+        except XmeyeError as err:
+            _LOGGER.debug("Could not read TCPMaxConn: %s", err)
+            return 10
+        return int(net.get("TCPMaxConn", 10)) if isinstance(net, dict) else 10
+
+    async def _write_max_connections(self, coordinator: Any, value: int) -> None:
+        """Write TCPMaxConn back, sending the whole section as the firmware wants."""
+        try:
+            async with coordinator.lock:
+                net = await coordinator.client.get_config("NetWork.NetCommon")
+                if not isinstance(net, dict):
+                    return
+                net["TCPMaxConn"] = value
+                await coordinator.client.set_config("NetWork.NetCommon", net)
+        except XmeyeError as err:
+            # Not fatal: the other options still save, and the user sees the old
+            # value next time rather than a broken flow.
+            _LOGGER.warning("Could not set TCPMaxConn to %s: %s", value, err)
 
     @staticmethod
     def _channel_options(coordinator: Any) -> list[SelectOptionDict]:

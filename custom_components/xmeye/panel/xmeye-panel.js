@@ -140,6 +140,9 @@ class XmeyePanel extends HTMLElement {
     this._live = null;
     this._player = nativePlayerSupported() ? "native" : "hls";
     this._liveStream = "sub";
+    //: Whether the options-flow defaults for player/stream have been applied for
+    //: the current device. Applied once so a manual switch is not undone.
+    this._defaultsApplied = false;
     this._native = null;
     this._osd = null;
     this._osdTimer = null;
@@ -252,6 +255,17 @@ class XmeyePanel extends HTMLElement {
     try {
       this._detail = await this._ws({ type: "xmeye/device", entry_id: this._entryId });
       this._error = null;
+      // Apply the player/stream defaults from the options flow once, on the
+      // first load of this device — not on every refresh, or a manual switch
+      // would be undone each poll.
+      if (!this._defaultsApplied) {
+        const opts = this._detail.options || {};
+        if (opts.default_player === "native" ? nativePlayerSupported() : opts.default_player) {
+          this._player = opts.default_player;
+        }
+        if (opts.default_live_stream) this._liveStream = opts.default_live_stream;
+        this._defaultsApplied = true;
+      }
       const enabled = this._detail.channels.filter((c) => c.enabled);
       if (enabled.length && !enabled.some((c) => c.index === this._selectedChannel)) {
         this._selectedChannel = enabled[0].index;
@@ -1702,6 +1716,8 @@ class XmeyePanel extends HTMLElement {
         this._recordings = null;
         this._configTree = null;
         this._log = null;
+        // A different recorder may have different defaults; let them apply again.
+        this._defaultsApplied = false;
         this._loadDetail();
       });
 

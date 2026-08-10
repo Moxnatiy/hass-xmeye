@@ -11,10 +11,13 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
+    CONF_DEFAULT_LIVE_STREAM,
+    CONF_DEFAULT_PLAYER,
     CONF_RTSP_PORT,
     CONF_STREAM,
     DEFAULT_RTSP_PORT,
     DOMAIN,
+    PLAYER_NATIVE,
     STREAM_MAIN,
     STREAM_SUB,
 )
@@ -180,6 +183,14 @@ async def ws_device_detail(
             "totals": {
                 "bitrate": data.total_bitrate,
                 "recording": len(data.recording_channels),
+            },
+            # Panel defaults chosen in the options flow, so the viewer opens the
+            # way the user set it rather than always on the built-in default.
+            "options": {
+                "default_player": entry.options.get(CONF_DEFAULT_PLAYER, PLAYER_NATIVE),
+                "default_live_stream": entry.options.get(
+                    CONF_DEFAULT_LIVE_STREAM, STREAM_SUB
+                ),
             },
         },
     )

@@ -411,7 +411,27 @@ The vendor app sends the same plaintext OPPlayBack commands; adjustable speed is
 client-side pacing, and the one server-side fast mode is the plaintext
 `Value=2`. Both are already in the integration.
 
-## 12. Optional payload encryption
+## 12. Connection limit and CombinMode
+
+`NetWork.NetCommon.TCPMaxConn` caps how many TCP connections the recorder
+accepts at once — 10 on the NBD8008R-U. That, not anything client-side, is the
+ceiling on how many streams a panel can run together: each live view, snapshot
+and archive download is its own connection, plus one control session.
+
+The field **is writable** (verified: set to 20, read back 20, restored to 10),
+and the integration exposes it in the options flow. Whether firmware honours a
+value above 10 for actual simultaneous connections is not guaranteed and was not
+provable here with a single camera online — the stored value changes, the
+enforced limit may not.
+
+`OPMonitor` accepts `CombinMode: "CONNECT_ALL"` (Ret 100) as well as the usual
+`"NONE"`. In principle that is the way to carry several channels over one
+connection and sidestep the limit. It could not be confirmed on this device: only
+one channel (D01) is connected, so CONNECT_ALL returned just that one 704x576
+stream, indistinguishable from a normal claim. Worth revisiting on a recorder
+with several cameras online.
+
+## 13. Optional payload encryption
 
 The device speaks DVRIP in the clear — the login reply says `DataUseAES: false`,
 and this whole client relies on it. The vendor app can *opt into* encrypting a

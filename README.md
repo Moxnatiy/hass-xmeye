@@ -37,10 +37,10 @@ the sub stream. The layout, the order and the selection are remembered.
 moment, the cursor follows the current frame, and there is pause, ±10 s
 stepping and speeds from ×1 to ×16.
 
-The recorder serves the archive strictly in real time and has no
-fast-forward command — measured on the device. So from ×4 the player switches
-to seek-based scrubbing: it takes one frame from each point spaced by the
-requested step. The actual speed is shown next to the requested one.
+Up to ×2 the player paces the full stream on its own clock; at ×4 and above it
+asks the recorder to thin the stream itself (a server-side fast-scan found by
+probing the protocol) and paces that to the requested rate. The actual speed
+reached is shown next to the requested one.
 
 **Three ways to play**, switchable inside the viewer, with a technical line
 under the picture (codec, resolution, frames per second, bitrate, dropped
@@ -99,9 +99,12 @@ and restart Home Assistant.
 You need the recorder's address, a user and a password. The DVRIP (34567) and
 RTSP (554) ports can be changed if yours are not standard.
 
-The options flow selects the channels, the stream used for viewing (**sub** by
-default, since the main one here is 4K and heavy to transcode), the stream used
-for snapshots, the polling interval, and whether the panel is shown.
+The options flow selects the channels, the camera stream (**sub** by default,
+since the main one is 4K and heavy to transcode), the snapshot stream, the
+panel's default player and live stream, the polling interval, whether the panel
+is shown, and the recorder's `TCPMaxConn` — the cap on how many streams run at
+once (written back to the device; raising it above 10 is not honoured by every
+firmware).
 
 ## Things worth knowing
 

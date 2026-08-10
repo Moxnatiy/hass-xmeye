@@ -16,6 +16,15 @@ CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_RTSP_PORT: Final = "rtsp_port"
 CONF_USE_RTSP: Final = "use_rtsp"
 CONF_ENABLE_PANEL: Final = "enable_panel"
+#: The panel's initial player and live stream, so a user who always wants, say,
+#: HLS on the main stream does not have to switch it by hand every time.
+CONF_DEFAULT_PLAYER: Final = "default_player"
+CONF_DEFAULT_LIVE_STREAM: Final = "default_live_stream"
+#: The recorder's own TCPMaxConn (NetWork.NetCommon). Exposed because it caps how
+#: many streams the panel can run at once; writing it back to the device is the
+#: only way to raise the ceiling. Whether firmware honours a higher value is not
+#: guaranteed — see docs/protocol.md.
+CONF_MAX_CONNECTIONS: Final = "max_connections"
 
 DEFAULT_PORT: Final = 34567
 DEFAULT_RTSP_PORT: Final = 554
@@ -23,12 +32,22 @@ DEFAULT_USERNAME: Final = "admin"
 DEFAULT_SCAN_INTERVAL: Final = 15
 MIN_SCAN_INTERVAL: Final = 5
 MAX_SCAN_INTERVAL: Final = 300
+#: Bounds for TCPMaxConn. The floor keeps the control session plus a couple of
+#: streams alive; the ceiling is where these recorders stop pretending.
+MIN_MAX_CONNECTIONS: Final = 4
+MAX_MAX_CONNECTIONS: Final = 32
 
 #: The main stream is 4K, the sub stream is small. For previews the sub stream
 #: is the better default: far less transcoding work.
 STREAM_MAIN: Final = "main"
 STREAM_SUB: Final = "sub"
 STREAM_OPTIONS: Final = [STREAM_MAIN, STREAM_SUB]
+
+#: Panel playback methods, mirrored from the panel's own PLAYERS list.
+PLAYER_NATIVE: Final = "native"
+PLAYER_HLS: Final = "hls"
+PLAYER_MJPEG: Final = "mjpeg"
+PLAYER_OPTIONS: Final = [PLAYER_NATIVE, PLAYER_HLS, PLAYER_MJPEG]
 
 UPDATE_INTERVAL: Final = timedelta(seconds=DEFAULT_SCAN_INTERVAL)
 
