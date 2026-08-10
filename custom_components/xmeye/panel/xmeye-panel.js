@@ -260,6 +260,104 @@ const SETTINGS_GROUPS = [
       { key: "UpdatePeriod", label: "Період оновлення, хв", type: "number", min: 1, max: 1440 },
     ],
   },
+  {
+    id: "motion",
+    title: "Детекція руху",
+    section: "Detect.MotionDetect",
+    perChannel: true,
+    hint: "Чутливість і реакція на рух. Зона детекції зберігається як є — вона редагується сіткою на самому реєстраторі.",
+    fields: [
+      { key: "Enable", label: "Увімкнено", type: "bool" },
+      { key: "Level", label: "Чутливість", type: "select",
+        options: [[1, "1 — найнижча"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — найвища"]],
+        numeric: true },
+      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+    ],
+  },
+  {
+    id: "blind",
+    title: "Засліплення камери",
+    section: "Detect.BlindDetect",
+    perChannel: true,
+    hint: "Реакція на перекриту або засліплену камеру.",
+    fields: [
+      { key: "Enable", label: "Увімкнено", type: "bool" },
+      { key: "Level", label: "Чутливість", type: "select",
+        options: [[1, "1 — найнижча"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — найвища"]],
+        numeric: true },
+      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+    ],
+  },
+  {
+    id: "loss",
+    title: "Втрата відео",
+    section: "Detect.LossDetect",
+    perChannel: true,
+    hint: "Реакція на зникнення сигналу з камери.",
+    fields: [
+      { key: "Enable", label: "Увімкнено", type: "bool" },
+      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+    ],
+  },
+  {
+    id: "widget",
+    title: "Накладки на канал",
+    section: "AVEnc.VideoWidget",
+    perChannel: true,
+    hint: "Назва каналу й час поверх картинки. Координати — у сітці 0…8191, незалежній від роздільності.",
+    fields: [
+      { key: "ChannelTitle.Name", label: "Назва каналу", type: "text" },
+      { key: "ChannelTitleAttribute.PreviewBlend", label: "Назва: показувати на моніторі", type: "bool" },
+      { key: "ChannelTitleAttribute.EncodeBlend", label: "Назва: вписувати у відеопотік", type: "bool" },
+      { key: "ChannelTitleAttribute.RelativePos.0", label: "Назва: X", type: "number", min: 0, max: 8191 },
+      { key: "ChannelTitleAttribute.RelativePos.1", label: "Назва: Y", type: "number", min: 0, max: 8191 },
+      { key: "TimeTitleAttribute.PreviewBlend", label: "Час: показувати на моніторі", type: "bool" },
+      { key: "TimeTitleAttribute.EncodeBlend", label: "Час: вписувати у відеопотік", type: "bool" },
+      { key: "TimeTitleAttribute.RelativePos.0", label: "Час: X", type: "number", min: 0, max: 8191 },
+      { key: "TimeTitleAttribute.RelativePos.1", label: "Час: Y", type: "number", min: 0, max: 8191 },
+    ],
+  },
+  {
+    id: "ptz",
+    title: "PTZ",
+    section: "Uart.PTZ",
+    perChannel: true,
+    hint: "Керування поворотною камерою через послідовний порт.",
+    fields: [
+      { key: "ProtocolName", label: "Протокол", type: "text",
+        hint: "Назва така сама, як у меню реєстратора (напр. PELCOD)" },
+      { key: "DeviceNo", label: "Адреса пристрою", type: "number", min: 1, max: 255 },
+      { key: "PortNo", label: "Номер порту", type: "number", min: 1, max: 8 },
+      { key: "Attribute.0", label: "Швидкість, біт/с", type: "select", numeric: true,
+        options: [[1200, "1200"], [2400, "2400"], [4800, "4800"], [9600, "9600"],
+                  [19200, "19200"], [38400, "38400"], [57600, "57600"], [115200, "115200"]] },
+      { key: "Attribute.1", label: "Парність", type: "text",
+        hint: "Значення таке саме, як у меню реєстратора (напр. NONE)" },
+      { key: "Attribute.2", label: "Біти даних", type: "number", min: 5, max: 8 },
+      { key: "Attribute.3", label: "Стоп-біти", type: "number", min: 1, max: 2 },
+    ],
+  },
 ];
 
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
@@ -387,6 +485,8 @@ class XmeyePanel extends HTMLElement {
     this._settingsGroup = SETTINGS_GROUPS[0].id;
     this._settings = null;
     this._settingsEdits = {};
+    //: Which channel a per-channel section is showing.
+    this._settingsChannel = 0;
     this._settingsSaving = false;
     this._settingsNote = null;
     this._error = null;
@@ -1725,7 +1825,10 @@ class XmeyePanel extends HTMLElement {
     } else if (this._settings.error) {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
     } else {
-      const value = this._settings.value || {};
+      // A per-channel section is an array indexed by channel, so the form edits
+      // one element while the save still sends the whole array back.
+      const raw = this._settings.value;
+      const value = (group.perChannel && Array.isArray(raw) ? raw[this._settingsChannel] : raw) || {};
       const rows = group.fields
         .map((field) => {
           const current =
@@ -1743,6 +1846,7 @@ class XmeyePanel extends HTMLElement {
       const dirty = Object.keys(this._settingsEdits).length;
       body = `
         ${group.warning ? `<p class="warn">${group.warning}</p>` : ""}
+        ${group.perChannel ? this._settingsChannelPicker() : ""}
         ${group.hint ? `<p class="hint pad">${group.hint}</p>` : ""}
         <div class="settings-form">${rows}</div>
         <div class="toolbar">
@@ -1775,7 +1879,14 @@ class XmeyePanel extends HTMLElement {
     return path.split(".").reduce((node, part) => (node == null ? node : node[part]), source);
   }
 
-  /** Write a dotted path into a copy, leaving the rest of the section intact. */
+  /**
+   * Write a dotted path into a copy, leaving the rest of the section intact.
+   *
+   * A path step may be an array index — ``RelativePos.0`` is the x of an overlay
+   * — so the copy has to keep an array an array. Spreading one into an object
+   * would turn ``[570, 7552]`` into ``{"0": 570, "1": 7552}``, which the
+   * firmware does not recognise and silently drops.
+   */
   _settingWrite(target, path, value) {
     const parts = path.split(".");
     const last = parts.pop();
@@ -1783,7 +1894,8 @@ class XmeyePanel extends HTMLElement {
     for (const part of parts) {
       // Copy on the way down: the section read from the recorder is the record
       // of what is actually stored and must not be mutated by editing.
-      node[part] = { ...(node[part] || {}) };
+      const child = node[part];
+      node[part] = Array.isArray(child) ? [...child] : { ...(child || {}) };
       node = node[part];
     }
     node[last] = value;
@@ -1831,6 +1943,24 @@ class XmeyePanel extends HTMLElement {
     if (reset) reset.disabled = !dirty;
   }
 
+  /** Channel selector for the sections that hold one entry per channel. */
+  _settingsChannelPicker() {
+    const channels = (this._detail && this._detail.channels) || [];
+    const options = (channels.length ? channels : [{ index: 0, name: "Канал 1" }])
+      .map(
+        (c) =>
+          `<option value="${c.index}" ${c.index === this._settingsChannel ? "selected" : ""}>
+             ${c.index + 1}. ${escapeHtml(c.name || "")}
+           </option>`
+      )
+      .join("");
+    return `
+      <div class="toolbar">
+        <label class="hint" for="setchannel">Канал</label>
+        <select id="setchannel">${options}</select>
+      </div>`;
+  }
+
   async _loadSettings() {
     const group =
       SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
@@ -1860,9 +1990,21 @@ class XmeyePanel extends HTMLElement {
 
     // Send the section whole, with the edits merged in: the firmware replaces
     // whatever it is given and defaults the fields left out.
-    const merged = { ...this._settings.value };
-    for (const [path, value] of Object.entries(this._settingsEdits)) {
-      this._settingWrite(merged, path, value);
+    let merged;
+    if (group.perChannel && Array.isArray(this._settings.value)) {
+      // Every channel is sent back, with only the edited one changed: the
+      // firmware replaces the section whole and would default the rest.
+      merged = this._settings.value.map((entry, index) =>
+        index === this._settingsChannel ? { ...entry } : entry
+      );
+      for (const [path, value] of Object.entries(this._settingsEdits)) {
+        this._settingWrite(merged[this._settingsChannel], path, value);
+      }
+    } else {
+      merged = { ...this._settings.value };
+      for (const [path, value] of Object.entries(this._settingsEdits)) {
+        this._settingWrite(merged, path, value);
+      }
     }
     try {
       const reply = await this._ws({
@@ -2372,6 +2514,10 @@ class XmeyePanel extends HTMLElement {
           value = field && field.type === "bool" ? input.checked : input.checked ? 1 : 0;
         } else if (input.type === "number") {
           value = Number(input.value);
+        } else if (field && field.numeric) {
+          // The option values are numbers on the device; a select hands back a
+          // string, and the firmware ignores a field of the wrong type.
+          value = Number(input.value);
         } else {
           value = input.value;
         }
@@ -2381,6 +2527,17 @@ class XmeyePanel extends HTMLElement {
         this._refreshSettingsToolbar();
       })
     );
+
+    const setChannel = root.getElementById("setchannel");
+    if (setChannel)
+      setChannel.addEventListener("change", () => {
+        this._settingsChannel = Number(setChannel.value);
+        // Edits belong to the channel they were made on; carrying them over
+        // would silently write one camera's values onto another.
+        this._settingsEdits = {};
+        this._settingsNote = null;
+        this._render();
+      });
 
     const saveSettings = root.getElementById("savesettings");
     if (saveSettings) saveSettings.addEventListener("click", () => this._saveSettings());

@@ -29,6 +29,18 @@ Field keys are paths, so a flag one level down — `EventHandler.BeepEnable`,
 `Server.Port` — is edited like any other, and the merge copies its way down
 rather than mutating what was read.
 
+Sections that hold one entry per channel — motion, blind and video-loss
+detection, the channel overlays, PTZ — get a channel selector. The form edits
+one element while the save still sends the whole array back, with only the
+selected channel changed, because the firmware replaces a section whole.
+Switching channel clears pending edits: carrying them over would write one
+camera's values onto another. Verified on the device that a per-channel write
+leaves the other channels, the detection zone and the schedule untouched.
+
+A path step may be an array index (`RelativePos.0` is an overlay's x), so the
+copy-on-write keeps an array an array — spreading one into an object turns
+`[570, 7552]` into `{"0": 570, "1": 7552}`, which the firmware drops.
+
 The network group carries a warning: changing a port drops the current
 connection, and the integration then needs the new port. `HostIP`, `GateWay`
 and `Submask` are deliberately absent — they are little-endian hex, and a wrong
