@@ -411,6 +411,26 @@ The vendor app sends the same plaintext OPPlayBack commands; adjustable speed is
 client-side pacing, and the one server-side fast mode is the plaintext
 `Value=2`. Both are already in the integration.
 
+### Playback by time ignores the channel
+
+`OPPlayBack` with `PlayMode: "ByTime"` always returns channel 0, whatever the
+request says. Measured on the NBD8008R-U, every one of these came back as the
+4K H.265 of channel 0 while asking for channel 1's 720p H.264:
+
+| Attempt | Result |
+|---|---|
+| `Parameter.Channel = 1` | channel 0 |
+| `OPPlayBack.Channel = 1` | channel 0 |
+| `Parameter.ChannelNo = 1` | channel 0 |
+| `Parameter.Channel = 2` (as a bitmask) | channel 0 |
+| `ByTime` plus that channel's real `FileName` | channel 0 |
+| **`PlayMode: "ByName"` with the recording's path** | **channel 1, correct** |
+
+The channel lives in the recording's path — `/idea0/2026-08-11/001/…` is channel
+1, `/002/` is channel 2 — and only a `ByName` request honours it. So archive
+playback has to name a recording, and covering a stretch of the day means
+walking the recordings in order rather than asking for a time range.
+
 ## 12. Connection limit and CombinMode
 
 `NetWork.NetCommon.TCPMaxConn` caps how many TCP connections the recorder

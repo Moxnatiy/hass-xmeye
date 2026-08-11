@@ -1529,10 +1529,19 @@ class XmeyePanel extends HTMLElement {
     if (!canvas) return;
     const { NativePlayer: Player } = await nativeModule;
     const fast = this._isFastScan();
+    // Stopping a player rejects the fetch it is waiting on, and that rejection
+    // lands after the next one has already started. Reporting it against
+    // whatever is current then paints the fresh stream as broken — which is
+    // exactly what switching camera looked like: an error, and the previous
+    // camera's last frame left on screen.
+    const mine = () => this._archivePlayer === player;
     const player = new Player(
       canvas,
-      (stats) => this._updatePlaybackTime(stats),
+      (stats) => {
+        if (mine()) this._updatePlaybackTime(stats);
+      },
       (reason) => {
+        if (!mine()) return;
         this._playback.error = reason;
         this._render();
       },
@@ -1553,6 +1562,8 @@ class XmeyePanel extends HTMLElement {
         await this._token()
       )
       .catch((err) => {
+        // A player that has been replaced is allowed to fail quietly.
+        if (!mine()) return;
         this._playback.error = String(err.message || err);
         this._render();
       });

@@ -170,21 +170,38 @@ class XmeyePlaybackView(HomeAssistantView):
             return web.Response(status=HTTPStatus.BAD_REQUEST, text=f"Invalid request: {err}")
 
         entry = coordinator.config_entry
-        archive = ArchiveStream(
-            entry.data["host"],
-            username=entry.data["username"],
-            password=entry.data["password"],
-            port=entry.data["port"],
-            channel=channel_index,
-        )
-        archive.stream_index = 0 if request.query.get("stream", "main") == "main" else 1
+        begin = begin.replace(tzinfo=None)
+        end = end.replace(tzinfo=None)
+        stream_index = 0 if request.query.get("stream", "main") == "main" else 1
         # ?fast=1 asks the recorder itself for a decimated fast-scan (Value=2):
         # the same frames spread across ~10x more recording time. It is the only
         # server-side fast-forward the protocol offers, and it stays fully
-        # decodable, so the browser can pace it to any rate. Normal playback
-        # leaves Value at 0.
-        if request.query.get("fast") == "1":
-            archive.value = 2
+        # decodable, so the browser can pace it to any rate.
+        value = 2 if request.query.get("fast") == "1" else 0
+
+        # Playback has to go by file name, not by time. Asking the recorder for a
+        # time range ignores the channel entirely — every ByTime request comes
+        # back as channel 0, whatever Channel says — while a request naming a
+        # recording plays that recording's channel correctly. Measured on the
+        # device: Channel in Parameter, Channel in OPPlayBack, ChannelNo and a
+        # channel bitmask all returned channel 0, and only ByName worked.
+        try:
+            async with coordinator.lock:
+                records = await coordinator.client.search_files(
+                    begin, end, channel=channel_index
+                )
+        except XmeyeError as err:
+            return web.Response(status=HTTPStatus.BAD_GATEWAY, text=str(err))
+
+        # A recording that started before the requested moment still holds it.
+        wanted = sorted(
+            (r for r in records if r.begin and r.end and r.end > begin and r.begin < end),
+            key=lambda r: r.begin,
+        )
+        if not wanted:
+            return web.Response(
+                status=HTTPStatus.NOT_FOUND, text="No recordings in that range"
+            )
 
         response = web.StreamResponse(
             status=HTTPStatus.OK,
@@ -197,39 +214,53 @@ class XmeyePlaybackView(HomeAssistantView):
 
         sent_header = False
         frames = skipped = 0
+        archive: ArchiveStream | None = None
         try:
-            await archive.start()
-            async for frame in archive.frames(
-                "", begin=begin.replace(tzinfo=None), end=end.replace(tzinfo=None),
-                by_time=True, timeout=25,
-            ):
-                if not frame.is_video or not frame.has_valid_nal:
-                    skipped += not frame.has_valid_nal
-                    continue
-
-                if not sent_header:
-                    if not frame.keyframe:
-                        continue
-                    header = json.dumps(
-                        {
-                            "codec": frame.codec,
-                            "width": frame.width,
-                            "height": frame.height,
-                            "fps": frame.fps or 25,
-                            "start": begin.isoformat(),
-                            "end": end.isoformat(),
-                        }
-                    ).encode()
-                    await response.prepare(request)
-                    await response.write(len(header).to_bytes(4, "little") + header)
-                    sent_header = True
-
-                stamp = (frame.timestamp or begin).timestamp() * 1000
-                await response.write(
-                    _FRAME_HEADER.pack(1 if frame.keyframe else 0, len(frame.payload), stamp)
-                    + frame.payload
+            # One recording is one session, so playing across a stretch of the
+            # day means walking the files in order.
+            for record in wanted:
+                archive = ArchiveStream(
+                    entry.data["host"],
+                    username=entry.data["username"],
+                    password=entry.data["password"],
+                    port=entry.data["port"],
+                    channel=channel_index,
                 )
-                frames += 1
+                archive.stream_index = stream_index
+                archive.value = value
+                await archive.start()
+                async for frame in archive.frames(record, timeout=25):
+                    if not frame.is_video or not frame.has_valid_nal:
+                        skipped += not frame.has_valid_nal
+                        continue
+
+                    if not sent_header:
+                        if not frame.keyframe:
+                            continue
+                        header = json.dumps(
+                            {
+                                "codec": frame.codec,
+                                "width": frame.width,
+                                "height": frame.height,
+                                "fps": frame.fps or 25,
+                                "start": begin.isoformat(),
+                                "end": end.isoformat(),
+                            }
+                        ).encode()
+                        await response.prepare(request)
+                        await response.write(len(header).to_bytes(4, "little") + header)
+                        sent_header = True
+
+                    stamp = (frame.timestamp or record.begin).timestamp() * 1000
+                    await response.write(
+                        _FRAME_HEADER.pack(
+                            1 if frame.keyframe else 0, len(frame.payload), stamp
+                        )
+                        + frame.payload
+                    )
+                    frames += 1
+                await archive.close()
+                archive = None
         except (asyncio.CancelledError, ConnectionResetError):
             _LOGGER.debug("Archive playback for channel %s stopped by the client", channel_index)
         except XmeyeError as err:
@@ -237,11 +268,13 @@ class XmeyePlaybackView(HomeAssistantView):
             if not sent_header:
                 return web.Response(status=HTTPStatus.BAD_GATEWAY, text=str(err))
         finally:
-            await archive.close()
+            if archive is not None:
+                await archive.close()
             _LOGGER.debug(
-                "Archive for channel %s: %d frames sent, %d service blocks dropped",
+                "Archive for channel %s: %d frames from %d recordings, %d service blocks dropped",
                 channel_index,
                 frames,
+                len(wanted),
                 skipped,
             )
 
