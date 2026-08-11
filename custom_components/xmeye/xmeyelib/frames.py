@@ -148,6 +148,12 @@ class MediaFrame:
         Decoders differ in how they react: some silently skip such units,
         others treat the frame as corrupt and stop with an error. Not passing
         them on at all is the safer choice.
+
+        The codec has to be right before this runs. An H.264 slice header of
+        ``0x41`` read as H.265 yields ``nuh_layer_id`` 32 — exactly the marker
+        this rejects — so every delta frame of an H.264 stream would be thrown
+        away and only keyframes would reach the browser. The demuxer stamps the
+        stream's codec onto frames that arrive without one.
         """
         payload = self.payload
         offset = 0
@@ -270,6 +276,12 @@ class FrameDemuxer:
             return
         while (frame := self._next()) is not None:
             self._synced = True
+            # Only a keyframe header carries the codec, so a delta frame arrives
+            # without one. It still has to be told apart, because the checks that
+            # follow read the NAL header differently for H.264 and H.265 — and
+            # reading an H.264 slice as H.265 makes it look like a service block.
+            if frame.is_video and not frame.codec and self.info.video_codec:
+                frame.codec = self.info.video_codec
             self.info.update(frame)
             yield frame
 

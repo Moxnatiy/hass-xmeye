@@ -288,3 +288,38 @@ def test_validation_checks_layer_and_temporal_id() -> None:
 
 def test_validation_without_start_code() -> None:
     assert not demux(pframe(b"\xDE\xAD\xBE\xEF" * 4))[0].has_valid_nal
+
+def test_h264_delta_frames_survive_the_service_block_filter() -> None:
+    """Regression: an H.264 delta frame must not be mistaken for a service block.
+
+    Only a keyframe header carries the codec. Read as H.265, an H.264 slice
+    header of ``0x41`` gives ``nuh_layer_id`` 32 — the very marker the filter
+    rejects — so every delta frame was dropped and the browser got keyframes
+    alone: one picture, then a still image at a fraction of the bitrate.
+    """
+    demuxer = FrameDemuxer()
+    # A real H.264 keyframe starts with an SPS (0x67); its delta frames are
+    # non-IDR slices (0x41). Both taken from an NBD8008R-U 720p stream.
+    key = iframe(b"\x00\x00\x00\x01\x67\x64\x00\x28" + b"\x00" * 16, flags=0x02)
+    delta = pframe(b"\x00\x00\x00\x01\x41\x9a\x00\x40" + b"\x00" * 16)
+
+    frames = list(demuxer.feed(key)) + list(demuxer.feed(delta))
+    assert len(frames) == 2
+    assert demuxer.info.video_codec == "h264"
+
+    keyframe, delta_frame = frames
+    assert keyframe.has_valid_nal, "the keyframe was rejected"
+    assert delta_frame.codec == "h264", "the delta frame did not inherit the codec"
+    assert delta_frame.has_valid_nal, "the delta frame was taken for a service block"
+
+
+def test_hevc_service_block_is_still_rejected_after_a_keyframe() -> None:
+    """The fix must not blunt the filter it works around.
+
+    Stamping the codec onto delta frames means the H.265 branch now runs with a
+    codec set, which is exactly when the real service block has to be caught.
+    """
+    demuxer = FrameDemuxer()
+    list(demuxer.feed(iframe(VIDEO_PAYLOAD)))
+    blocks = list(demuxer.feed(pframe(SERVICE_BLOCK)))
+    assert blocks and not blocks[0].has_valid_nal
