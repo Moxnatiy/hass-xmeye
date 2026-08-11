@@ -115,6 +115,10 @@ firmware).
 - **Connections are limited.** The recorder holds about ten at once
   (`TCPMaxConn`). There is one control session and every stream opens its own,
   so avoid a very short polling interval or a great many cameras on one page.
+- **A camera added later does not appear by itself.** The channel list is chosen
+  when the integration is set up, and a camera plugged into the recorder
+  afterwards is not in it. Home Assistant raises a repair notice naming the new
+  cameras; tick them in the integration options to get entities for them.
 - **Channels count from zero** in services and entities, as in the protocol
   itself. RTSP URLs count from one, and the integration converts this for you.
 - **The RTSP URL must be the native Xiongmai one.** The widespread Dahua-style

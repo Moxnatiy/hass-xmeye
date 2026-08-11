@@ -2056,13 +2056,21 @@ class XmeyePanel extends HTMLElement {
     if (!channel) return "";
 
     const players = PLAYERS.filter(([id]) => id !== "native" || nativePlayerSupported());
+    // Hiding the native option with no explanation reads as a bug. When the
+    // cause is the origin rather than the browser, say so: it is fixable.
+    const insecure =
+      !nativePlayerSupported() && typeof window !== "undefined" && !window.isSecureContext;
     return `
       <div class="overlay" id="overlay">
         <div class="overlay-box">
           <div class="overlay-head">
             <span>${channel.name}</span>
             <div class="overlay-controls">
-              <select id="player" title="Спосіб програвання">
+              <select id="player" title="${
+                insecure
+                  ? "Нативний плеєр недоступний: сторінка відкрита по http, а WebCodecs працює лише в захищеному контексті"
+                  : "Спосіб програвання"
+              }">
                 ${players
                   .map(
                     ([id, label]) =>
@@ -2080,6 +2088,15 @@ class XmeyePanel extends HTMLElement {
               <button class="close" id="closelive">✕</button>
             </div>
           </div>
+          ${
+            insecure
+              ? `<p class="warn">Нативний плеєр (WebCodecs) недоступний: сторінку відкрито по
+                   <b>http</b> на адресу ${escapeHtml(location.host)}, а браузер вмикає WebCodecs
+                   лише в захищеному контексті. Відкрийте Home Assistant по <b>https</b> або через
+                   <b>localhost</b> — і зʼявиться найменша затримка. Safari тут поблажливіший, тому
+                   в ньому може працювати те, чого немає в Chrome.</p>`
+              : ""
+          }
           ${
             channel.entity_id || this._player === "native"
               ? `<div id="livecard" class="livecard"><div class="empty">Готую відео…</div></div>`
@@ -2172,6 +2189,15 @@ class XmeyePanel extends HTMLElement {
       lines.push(`канал ${channel.index + 1} (${channel.name}), ${channel.resolution}`);
       lines.push(`сутності: ${JSON.stringify(channel.entity_ids)}`);
     }
+    // WebCodecs needs a secure context, so a recorder opened over plain http on
+    // a LAN address has no VideoDecoder at all. That is the usual reason the
+    // native player is missing, and without the origin in the report it looks
+    // like a browser that simply cannot do it.
+    lines.push(
+      `origin: ${location.origin}, захищений контекст: ${
+        window.isSecureContext ? "так" : "НІ — WebCodecs вимкнено браузером"
+      }`
+    );
     lines.push(
       `WebCodecs: ${typeof VideoDecoder !== "undefined" ? "є" : "немає"}, ` +
         `MediaSource HEVC: ${

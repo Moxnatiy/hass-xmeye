@@ -280,5 +280,11 @@
         }
       }
     }
+  },
+  "issues": {
+    "new_channels": {
+      "title": "New cameras on {title}",
+      "description": "The recorder reports cameras that this integration is not exposing: {names}.\n\nThey were connected after setup, so they are not in the selected channels. Open the integration options and tick the ones you want as entities."
+    }
   }
 }

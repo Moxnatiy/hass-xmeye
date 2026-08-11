@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -151,6 +152,7 @@ class XmeyeCoordinator(DataUpdateCoordinator[XmeyeData]):
 
         state = await self.client.work_state()
         channels = await self.client.channel_statuses()
+        self._flag_new_channels(channels)
         disks = await self.client.storage()
         device_time = await self.client.get_time()
 
@@ -167,6 +169,43 @@ class XmeyeCoordinator(DataUpdateCoordinator[XmeyeData]):
             device_time=device_time,
             archive_from=min(starts) if starts else None,
             archive_to=max(ends) if ends else None,
+        )
+
+
+    def _flag_new_channels(self, channels: list[ChannelStatus]) -> None:
+        """Point out cameras the recorder has but the options do not.
+
+        The channel list is chosen once, when the integration is set up, and a
+        camera plugged into the recorder later is simply absent from it. Nothing
+        is broken, so nothing complains, and the camera quietly never appears —
+        which reads as a bug rather than a setting. Rather than override an
+        explicit choice, say so and let the user decide.
+        """
+        chosen = self.config_entry.options.get(CONF_CHANNELS)
+        if not chosen:
+            # No explicit choice yet, so every connected channel is already used.
+            return
+
+        known = {int(c) for c in chosen}
+        missing = sorted(c.index for c in channels if c.online and c.index not in known)
+        issue_id = f"new_channels_{self.config_entry.entry_id}"
+
+        if not missing:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            return
+
+        names = ", ".join(
+            f"{index + 1}. {self.data.channel_name(index) if self.data else index + 1}"
+            for index in missing
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="new_channels",
+            translation_placeholders={"names": names, "title": self.config_entry.title},
         )
 
     async def async_snapshot(self, channel: int, *, use_sub: bool = True) -> bytes | None:
