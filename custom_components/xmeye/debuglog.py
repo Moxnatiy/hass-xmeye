@@ -45,7 +45,11 @@ class DebugLog:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self.path = Path(hass.config.path(LOG_NAME))
-        self.enabled = False
+        #: The switch outlives a restart. Half the faults worth recording are
+        #: the ones that need Home Assistant restarted to provoke, and having to
+        #: turn the log back on afterwards means missing exactly those.
+        self.marker = Path(hass.config.path(f"{LOG_NAME}.on"))
+        self.enabled = self.marker.exists()
         #: Everything is timed from here, so web and back share an origin rather
         #: than two clocks that agree only to the second. Both forms are kept:
         #: monotonic for the server's own events, because it cannot be moved by
@@ -59,6 +63,13 @@ class DebugLog:
             self.started_epoch = time.time()
             self._write([f"{'':>8} ---- log opened ----"])
         self.enabled = on
+        try:
+            if on:
+                self.marker.touch()
+            else:
+                self.marker.unlink(missing_ok=True)
+        except OSError as err:
+            _LOGGER.warning("Could not record the log switch: %s", err)
 
     def note(self, side: str, source: str, detail: str) -> None:
         """One event. Never raises: a broken log must not break the video."""
@@ -66,7 +77,9 @@ class DebugLog:
             return
         self._write([self.line(time.monotonic() - self.started, side, source, detail)])
 
-    def note_client(self, entries: list[dict], client_now: float = 0.0) -> None:
+    def note_client(
+        self, entries: list[dict], client_now: float = 0.0, client: str = ""
+    ) -> None:
         """A batch shipped by the panel, placed on this file's clock.
 
         The browser times events against its own page load, which is not this
@@ -79,10 +92,13 @@ class DebugLog:
         if not self.enabled:
             return
         skew = (time.time() - client_now / 1000) if client_now else 0.0
+        # Several browsers can be recording at once — which is the whole point
+        # when a fault happens in one of them — so each says which it is.
+        side = f"web:{client[:4]}" if client else "web"
         lines = [
             self.line(
                 float(entry.get("epoch", 0.0)) / 1000 + skew - self.started_epoch,
-                "web",
+                side,
                 str(entry.get("event", ""))[:40],
                 str(entry.get("detail", ""))[:400],
             )
@@ -92,7 +108,7 @@ class DebugLog:
 
     @staticmethod
     def line(at: float, side: str, source: str, detail: str) -> str:
-        return f"{at:8.3f} {side:<5} {source:<12} {detail}"
+        return f"{at:8.3f} {side:<9} {source:<12} {detail}"
 
     def read_in_order(self) -> str:
         """The file sorted by its own clock.

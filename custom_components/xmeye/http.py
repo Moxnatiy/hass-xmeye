@@ -682,7 +682,10 @@ class XmeyeDebugLogView(HomeAssistantView):
         # Off the event loop: this touches the disk, and it is called while a
         # wall is running.
         await self.hass.async_add_executor_job(
-            log.note_client, entries, float(body.get("now") or 0.0)
+            log.note_client,
+            entries,
+            float(body.get("now") or 0.0),
+            str(body.get("client") or "")[:8],
         )
         return web.json_response({"enabled": log.enabled, "written": len(entries)})
 

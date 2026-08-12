@@ -182,6 +182,65 @@ class BitReader {
 export const nativePlayerSupported = () =>
   typeof VideoDecoder !== "undefined" && typeof ReadableStream !== "undefined";
 
+//: Where configurations that died on their first frames are remembered.
+const BAD_CONFIGS = "xmeye-bad-configs";
+
+/** What identifies a configuration for a particular stream shape. */
+const configKey = (info, config) =>
+  `${info.codec}/${info.width}x${info.height}/${config.codec}/${config.hardwareAcceleration}`;
+
+/**
+ * A browser can call a configuration supported and still fail on it.
+ *
+ * Safari reports hardware HEVC as supported at these sizes, decodes the
+ * keyframe, and then dies on the first delta frame that follows. The search
+ * recovers — the next candidate works — but it costs a few seconds of blank
+ * tile, and without memory it costs them again on every single page load.
+ *
+ * So a configuration that failed almost immediately is moved to the back rather
+ * than dropped: hardware can be busy for reasons that pass, and a permanent
+ * verdict from one bad minute would be worse than the delay it saves.
+ */
+export function demoteKnownBad(configs, info) {
+  let bad = [];
+  try {
+    bad = JSON.parse(localStorage.getItem(BAD_CONFIGS)) || [];
+  } catch (err) {
+    bad = [];
+  }
+  if (!bad.length) return configs;
+  const known = new Set(bad);
+  const good = configs.filter((c) => !known.has(configKey(info, c)));
+  const demoted = configs.filter((c) => known.has(configKey(info, c)));
+  // Never return an empty list: a demoted candidate still beats no candidate.
+  return good.length ? [...good, ...demoted] : configs;
+}
+
+/** Forget a demotion once the same configuration has proven itself. */
+export function forgetBadConfig(info, config) {
+  try {
+    const bad = JSON.parse(localStorage.getItem(BAD_CONFIGS)) || [];
+    const key = configKey(info, config);
+    if (!bad.includes(key)) return;
+    localStorage.setItem(BAD_CONFIGS, JSON.stringify(bad.filter((item) => item !== key)));
+  } catch (err) {
+    /* nothing to forget if storage is unavailable */
+  }
+}
+
+export function rememberBadConfig(info, config) {
+  try {
+    const bad = JSON.parse(localStorage.getItem(BAD_CONFIGS)) || [];
+    const key = configKey(info, config);
+    if (bad.includes(key)) return;
+    // Bounded: a handful of streams on a handful of browsers, and an old entry
+    // costs nothing but ordering.
+    localStorage.setItem(BAD_CONFIGS, JSON.stringify([...bad, key].slice(-24)));
+  } catch (err) {
+    /* private browsing refuses storage; the search still works, just slower */
+  }
+}
+
 export class NativePlayer {
   /**
    * @param {HTMLCanvasElement} canvas where to draw
@@ -460,20 +519,28 @@ export class NativePlayer {
     const scale = Math.min(1, MAX_CANVAS_WIDTH / Math.max(this.info.width, 1));
     const width = Math.round(this.info.width * scale);
     const height = Math.round(this.info.height * scale);
-    // Writing either dimension wipes the canvas, whether or not the value
-    // changed — so this is where a picture on screen goes black. Worth a line:
-    // a second pass through here is a visible blink and looks like nothing else.
+    // Writing either dimension wipes the canvas even when the value is
+    // unchanged, so a decoder restart on the same stream used to blank a tile
+    // that was showing a perfectly good picture — the blink on Safari, where the
+    // hardware HEVC decoder dies on the first delta frame and the next
+    // configuration takes three seconds to produce anything. The last frame now
+    // stays up while the new decoder finds its feet.
     this._configures = (this._configures || 0) + 1;
+    const resized = this.canvas.width !== width || this.canvas.height !== height;
     this.note(
       "canvas sized",
-      `${width}x${height}, configure #${this._configures}` +
-        (this.stats.decoded ? `, clearing ${this.stats.decoded} drawn frames` : "")
+      `${width}x${height}, configure #${this._configures}, ` +
+        (resized
+          ? `clearing ${this.stats.decoded} drawn frames`
+          : "same size, picture kept")
     );
-    this.canvas.width = width;
-    this.canvas.height = height;
+    if (resized) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
 
     if (!this._configs) {
-      this._configs = await this._pickConfigs(keyframe);
+      this._configs = demoteKnownBad(await this._pickConfigs(keyframe), this.info);
       this._configIndex = 0;
       this.note(
         "usable configurations",
@@ -615,6 +682,12 @@ export class NativePlayer {
     const stable = lived * 1000 > STABLE_AFTER;
     this.note("restart", `configuration lived ${lived.toFixed(1)}s`);
     if (!stable && this._configs && this._configIndex + 1 < this._configs.length) {
+      // A configuration that lasted a second is not a configuration. Remember it
+      // so the next page load does not spend the same seconds finding out again.
+      if (lived < 1 && this.info) {
+        rememberBadConfig(this.info, this._configs[this._configIndex]);
+        this.note("remembered as bad", `lived ${lived.toFixed(2)}s`);
+      }
       this._configIndex += 1;
       this.stats.error = null;
       this.note("taking the next configuration", `#${this._configIndex + 1}`);
@@ -850,6 +923,10 @@ export class NativePlayer {
     ) {
       this.stats.restarts = 0;
       this.stats.error = null;
+      // It has now run for a quarter of a minute, so whatever made it look bad
+      // before was the moment, not the configuration. A demotion that is never
+      // lifted would keep punishing it for one bad minute.
+      if (this.info && this._configs) forgetBadConfig(this.info, this._configs[this._configIndex]);
     }
 
     // Experiment mode: do not draw. If the decoder survives without drawing,
@@ -990,6 +1067,7 @@ export class MultiplexReader {
     //: Settles once the session is known, or once the reader stops without
     //: ever learning it — a caller waiting on it is never left hanging.
     this.ready = new Promise((resolve) => (this._announce = resolve));
+    this._t0 = performance.now();
   }
 
   add(channel, player) {
@@ -1005,6 +1083,7 @@ export class MultiplexReader {
   }
 
   stop() {
+    this._say("shared stream stopped", `by the panel, after ${this.bytes} bytes`);
     this._announce();
     this.controller.abort();
     this.players.forEach((player) => player.stop());
@@ -1030,10 +1109,16 @@ export class MultiplexReader {
       buffer = merged;
     };
 
+    this._say("shared stream open", url.replace(/\?.*/, ""));
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // The server ending the response is not an error, but it stops every
+          // tile at once, so it is never something to discover from the screen.
+          this._say("shared stream ended", `${this.bytes} bytes, by the server`);
+          break;
+        }
         this.bytes += value.length;
         append(value);
 
@@ -1066,9 +1151,20 @@ export class MultiplexReader {
         }
       }
     } catch (err) {
+      this._say(
+        "shared stream broke",
+        `${err.name}: ${err.message || err}, after ${this.bytes} bytes`
+      );
       if (err.name !== "AbortError") throw err;
     } finally {
       this._announce(this.session);
     }
+  }
+
+  /** Into the shared log, when there is one. The reader has no channel of its own. */
+  _say(event, detail) {
+    const entry = { at: `${((performance.now() - this._t0) / 1000).toFixed(2)}s`, event, detail };
+    if (typeof this.log === "function") this.log(entry);
+    else this.log.push(entry);
   }
 }

@@ -526,6 +526,9 @@ class XmeyePanel extends HTMLElement {
     //: recording is the one that opens as the page loads.
     this._t0 = performance.now();
     this._logToFile = localStorage.getItem("xmeye-log-file") === "1";
+    //: Names this page in the shared log. Two browsers recording at once is the
+    //: normal case when chasing a fault that happens in only one of them.
+    this._clientId = Math.random().toString(36).slice(2, 6);
     this._logQueue = [];
     this._logTimer = null;
     this._watchTimer = null;
@@ -562,14 +565,43 @@ class XmeyePanel extends HTMLElement {
       if (this._live === null && this._tab === "channels") this._refreshThumbnails();
     }, THUMB_INTERVAL);
 
-    if (this._logToFile) {
-      this._logTimer = setInterval(() => this._shipLog(false), 2000);
-      this._noteLoad();
-    }
+    if (this._logToFile) this._beginLogging();
+    // The switch belongs to the recorder, not to this browser: a fault that only
+    // happens in one browser has to be recordable from that browser, and turning
+    // it on there first defeats the point. Local storage is only a head start,
+    // so nothing is missed while the server is asked.
+    this._askIfLogging();
     // A refresh is exactly when the interesting events happen, and the last
     // couple of seconds of them would otherwise die with the page.
     this._unload = () => this._shipLog(true);
     window.addEventListener("pagehide", this._unload);
+  }
+
+  _beginLogging() {
+    clearInterval(this._logTimer);
+    this._logTimer = setInterval(() => this._shipLog(false), 2000);
+    this._noteLoad();
+  }
+
+  async _askIfLogging() {
+    try {
+      const reply = await fetch("/api/xmeye/debug", {
+        headers: { Authorization: `Bearer ${await this._token()}` },
+      }).then((r) => r.json());
+      if (reply.enabled === this._logToFile) return;
+      this._logToFile = reply.enabled;
+      localStorage.setItem("xmeye-log-file", reply.enabled ? "1" : "0");
+      if (reply.enabled) {
+        this._noteDiag("журнал", `запис увімкнено на сервері · ${navigator.userAgent}`);
+        this._beginLogging();
+        this._watchTiles();
+      } else {
+        clearInterval(this._logTimer);
+        this._logQueue = [];
+      }
+    } catch (err) {
+      /* the panel works without the log; nothing here is worth a message */
+    }
   }
 
   disconnectedCallback() {
@@ -1173,8 +1205,9 @@ class XmeyePanel extends HTMLElement {
           Authorization: `Bearer ${await this._token()}`,
           "Content-Type": "application/json",
         },
-        // `now` lets the server line this batch up with its own clock.
-        body: JSON.stringify({ now: Date.now(), entries }),
+        // `now` lets the server line this batch up with its own clock, and
+        // `client` tells one browser's lines from another's when two are open.
+        body: JSON.stringify({ now: Date.now(), client: this._clientId, entries }),
         // The last batch is sent while the page is going away, and a plain
         // request would be cancelled with it.
         keepalive: Boolean(final),
@@ -1210,6 +1243,17 @@ class XmeyePanel extends HTMLElement {
    * again, which behaves differently enough from a reload to be worth naming
    * before anything else in the file is read.
    */
+  /** Which browser this is, in the two words that matter for a decoder fault. */
+  _browserName() {
+    const ua = navigator.userAgent;
+    const version = (pattern) => (ua.match(pattern) || [])[1] || "?";
+    if (/Firefox\//.test(ua)) return `Firefox ${version(/Firefox\/([\d.]+)/)}`;
+    if (/Edg\//.test(ua)) return `Edge ${version(/Edg\/([\d.]+)/)}`;
+    if (/Chrome\//.test(ua)) return `Chrome ${version(/Chrome\/([\d.]+)/)}`;
+    if (/Safari\//.test(ua)) return `Safari ${version(/Version\/([\d.]+)/)}`;
+    return ua.slice(0, 40);
+  }
+
   _noteLoad() {
     const nav = performance.getEntriesByType("navigation")[0];
     const script = performance
@@ -1218,6 +1262,9 @@ class XmeyePanel extends HTMLElement {
     this._noteDiag(
       "завантаження",
       [
+        // Named once per page, so the browser behind every later line is known
+        // without repeating a user agent string on each of them.
+        `${this._clientId} ${this._browserName()}`,
         `тип ${nav ? nav.type : "?"}`,
         nav ? `до готовності ${(nav.domContentLoadedEventEnd / 1000).toFixed(2)}с` : "",
         // A zero transfer size with a non-zero decoded size means the browser
@@ -1737,6 +1784,7 @@ class XmeyePanel extends HTMLElement {
       .start(`/api/xmeye/native/${this._entryId}?${params}`, await this._token())
       .catch((err) => {
         if (this._wallReader !== reader) return;
+        this._noteDiag("стіна", `спільне з'єднання впало: ${err.message || err}`);
         channels.forEach((index) => this._failWallTile(index, err));
       });
   }
@@ -1771,6 +1819,7 @@ class XmeyePanel extends HTMLElement {
     const message = String((err && err.message) || err);
     const attempt = (this._wallRetries.get(index) || 0) + 1;
     this._wallRetries.set(index, attempt);
+    this._noteDiag("стіна", `канал ${index} впав (${attempt}): ${message}`);
 
     if (attempt > WALL_RETRIES) {
       this._updateWallCell(index, { error: message });

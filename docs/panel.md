@@ -98,6 +98,16 @@ on the shared connection that difference is a short request naming the session
 rather than a reconnection — the recorder adds or drops that one camera and
 keeps feeding the rest.
 
+A decoder that fails no longer blanks the tile. Writing a canvas dimension
+clears it even when the value is unchanged, so every restart used to wipe a
+picture that was perfectly good — most visibly in Safari, whose hardware HEVC
+decoder accepts a keyframe, draws it, and then dies on the very next delta frame.
+The canvas is now only resized when the size actually changes, so the last frame
+stays up while the next configuration is found. The configuration that failed
+within a second is also remembered, and tried last on the following load rather
+than costing the same seconds again; a configuration that later runs for a
+quarter of a minute is forgiven.
+
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 A wall is meant to be left open, so a tile that stops is brought back rather
