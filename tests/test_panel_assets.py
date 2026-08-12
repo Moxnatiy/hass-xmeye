@@ -23,8 +23,11 @@ SOURCES = sorted(PANEL_DIR.glob("*.js"))
 #: Calls of the form ``this._something(`` — these are what must be defined.
 _CALL = re.compile(r"this\.(_[A-Za-z][A-Za-z0-9]*)\s*\(")
 
-#: Method definitions inside a class.
-_METHOD = re.compile(r"^\s{2}(?:async\s+)?(_[A-Za-z][A-Za-z0-9]*)\s*\(", re.MULTILINE)
+#: Method definitions inside a class. ``get``/``set`` count: an accessor that
+#: returns a function is called exactly like a method, and reads like one.
+_METHOD = re.compile(
+    r"^\s{2}(?:async\s+|get\s+|set\s+)?(_[A-Za-z][A-Za-z0-9]*)\s*\(", re.MULTILINE
+)
 
 #: Assignments of the form ``this._something = () =>`` also make a method callable.
 _ASSIGNED = re.compile(r"this\.(_[A-Za-z][A-Za-z0-9]*)\s*=")

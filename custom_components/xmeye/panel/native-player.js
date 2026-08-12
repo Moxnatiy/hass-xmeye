@@ -267,7 +267,10 @@ export class NativePlayer {
     //: player report what happened to it.
     // The log is shared with the panel: otherwise it would vanish on every
     // stream switch, and the switch itself is the interesting part.
-    this.log = sharedLog || [];
+    // Either an array to append to, or a function to call as events happen.
+    // The panel passes a function so its file log is written in real order.
+    this.sink = typeof sharedLog === "function" ? sharedLog : null;
+    this.log = this.sink ? [] : sharedLog || [];
     this._t0 = performance.now();
   }
 
@@ -307,11 +310,23 @@ export class NativePlayer {
     this._enqueue(payload, keyframe, stamp);
   }
 
-  /** Record an event in the diagnostics log. */
+  /**
+   * Record an event in the diagnostics log.
+   *
+   * The log may be a plain array or a function. A function is how the panel
+   * takes these events as they happen — a decoder being configured, a first
+   * frame drawn — so they reach the shared log file at the moment they occur
+   * rather than at the next statistics tick a second later. Ordering is the
+   * whole point of that file, and a second is an eternity in it.
+   */
   note(event, detail) {
     const at = ((performance.now() - this._t0) / 1000).toFixed(2);
-    this.log.push({ at: `${at}s`, event, ...(detail ? { detail } : {}) });
+    const entry = { at: `${at}s`, event, ...(detail ? { detail } : {}) };
+    this.log.push(entry);
     if (this.log.length > 200) this.log.shift();
+    // The player keeps its own recent history for the report; the sink is a
+    // live copy for whoever wants events as they happen.
+    if (this.sink) this.sink(entry);
   }
 
   /** The log in a form suitable for pasting into a report. */
@@ -924,6 +939,7 @@ const MUX_HEADER_BYTES = 16;
 const MUX_INFO = 0;
 const MUX_FRAME = 1;
 const MUX_HELLO = 2;
+const MUX_ERROR = 3;
 
 /**
  * One connection carrying every tile of the wall.
@@ -933,9 +949,15 @@ const MUX_HELLO = 2;
  * response and hands each record to the player that owns that channel.
  */
 export class MultiplexReader {
-  constructor(sharedLog) {
+  constructor(sharedLog, onChannelError) {
     this.players = new Map();
-    this.log = sharedLog || [];
+    //: Called when the server says a channel is in trouble, so the tile can say
+    //: so instead of sitting on "connecting" for as long as the page is open.
+    this.onChannelError = onChannelError || (() => {});
+    // Either an array to append to, or a function to call as events happen.
+    // The panel passes a function so its file log is written in real order.
+    this.sink = typeof sharedLog === "function" ? sharedLog : null;
+    this.log = this.sink ? [] : sharedLog || [];
     this.controller = new AbortController();
     this.bytes = 0;
     //: Named by the server in the first record, so the channel set of this
@@ -1003,6 +1025,9 @@ export class MultiplexReader {
           if (kind === MUX_HELLO) {
             this.session = JSON.parse(new TextDecoder().decode(payload)).session;
             this._announce(this.session);
+          } else if (kind === MUX_ERROR) {
+            const said = JSON.parse(new TextDecoder().decode(payload));
+            this.onChannelError(said.channel, said);
           }
           const player = this.players.get(channel);
           if (player) {

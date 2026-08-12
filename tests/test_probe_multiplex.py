@@ -76,6 +76,27 @@ def test_a_record_split_across_reads_is_still_one_record(size: int) -> None:
         assert piecemeal.channels[index].info == item.info
 
 
+def test_a_channel_in_trouble_is_reported_with_its_reason() -> None:
+    """The server says why a tile is blank; the probe must not swallow it."""
+    said = json.dumps(
+        {"channel": 1, "reason": "silent", "detail": "", "attempt": 1, "retryIn": 3}
+    ).encode()
+    parser = probe.MuxParser()
+    parser.feed(record(probe.MUX_ERROR, 1, 0, said), now=21.0)
+    assert parser.channels[1].troubles == [(21.0, "silent")]
+    assert parser.channels[1].frames == 0
+
+
+def test_a_reason_carrying_a_detail_keeps_it() -> None:
+    """A connection failure says what failed; the word alone would lose that."""
+    said = json.dumps(
+        {"channel": 0, "reason": "failed", "detail": "login refused", "attempt": 0, "retryIn": 0}
+    ).encode()
+    parser = probe.MuxParser()
+    parser.feed(record(probe.MUX_ERROR, 0, 0, said), now=1.5)
+    assert parser.channels[0].troubles == [(1.5, "failed (login refused)")]
+
+
 def test_a_gap_in_the_frames_is_reported_as_a_stall() -> None:
     """The symptom the probe is for: a channel that goes quiet mid-stream."""
     item = probe.ChannelReport(0)
@@ -95,5 +116,5 @@ def test_the_header_matches_the_server() -> None:
     assert '_MUX_HEADER = struct.Struct("<BHBId")' in server
     assert probe.MUX_HEADER.format == "<BHBId"
     assert probe.MUX_HEADER.size == struct.calcsize("<BHBId") == 16
-    assert "MUX_INFO, MUX_FRAME, MUX_HELLO = 0, 1, 2" in server
-    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_HELLO) == (0, 1, 2)
+    assert "MUX_INFO, MUX_FRAME, MUX_HELLO, MUX_ERROR = 0, 1, 2, 3" in server
+    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_HELLO, probe.MUX_ERROR) == (0, 1, 2, 3)

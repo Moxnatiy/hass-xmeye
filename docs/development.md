@@ -88,6 +88,36 @@ All of them read only; none change anything on the device.
 | `tools/sync_lib.py` | Syncs the vendored library copy |
 | `tools/ha_restart.sh` | Restarts a development Home Assistant, forcing the port free instead of waiting out the database shutdown |
 
+### The joint log
+
+The panel and the server write into one file, `xmeye-debug.log`, beside the Home
+Assistant configuration. Turn it on in the panel's **Звіт** tab; it is off by
+default and nothing leaves the machine.
+
+Both sides are placed on the same clock — the browser stamps events with its own
+wall time and says what time it thinks it is with every batch, so a panel open on
+a phone with a skewed clock still lands in the right place, within a network hop.
+Lines are appended as they arrive, so read the file through `sort -n` (the
+panel's own viewer sorts it for you):
+
+```
+   1.643 back  channel 0    announced 704x576 h265 after 0.22s, 0 frames waiting for a key
+   1.647 web   ch0 stream header {"channel":0,"codec":"h265",...}
+   1.648 web   ch0 decoder configuration hev1.1.2.L153 / prefer-hardware
+   1.656 web   ch0 first frame received 704x576
+   2.746 back  channel 1    announced 640x480 h264 after 1.33s, 0 frames waiting
+   2.757 web   ch1 first frame received 640x480
+```
+
+That is what settled why a wall comes up one tile at a time: thirteen
+milliseconds from the server announcing a channel to the browser drawing it, and
+a second and a half between the two channels. The delay is the recorder's.
+
+Note what the file does **not** measure. The panel's per-tile statistics are
+published once a second, so anything derived from them is a second late — the
+first version of this log said "first frame" from that tick and made the browser
+look a full second slow. Player events now go into the file as they happen.
+
 `probe_multiplex.py` talks to Home Assistant rather than to the recorder, so it
 needs a long-lived access token (Profile -> Security) in `HA_TOKEN` or in
 `.local/ha-token`, which is gitignored. It never prints the token.

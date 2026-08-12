@@ -34,7 +34,7 @@ import time
 
 #: Mirrors _MUX_HEADER in custom_components/xmeye/http.py.
 MUX_HEADER = struct.Struct("<BHBId")
-MUX_INFO, MUX_FRAME, MUX_HELLO = 0, 1, 2
+MUX_INFO, MUX_FRAME, MUX_HELLO, MUX_ERROR = 0, 1, 2, 3
 
 #: Mirrors _FRAME_HEADER, the single-channel format.
 FRAME_HEADER = struct.Struct("<BId")
@@ -58,6 +58,7 @@ class ChannelReport:
         self.keyframes = 0
         self.bytes = 0
         self.stalls: list[tuple[float, float]] = []
+        self.troubles: list[tuple[float, str]] = []
 
     def note_info(self, now: float, info: dict) -> None:
         self.info = info
@@ -124,6 +125,9 @@ def report(channels: dict[int, ChannelReport], elapsed: float, label: str) -> No
             print("  -> the server starts them together; a stagger on screen is the client's")
     if silent:
         print(f"  no picture at all from {silent} within the window")
+    for index in sorted(channels):
+        for at, message in channels[index].troubles:
+            print(f"  ch{index} at {at:5.2f}s: {message}")
 
 
 class MuxParser:
@@ -152,6 +156,10 @@ class MuxParser:
                 item.note_info(now, json.loads(payload))
             elif kind == MUX_FRAME:
                 item.note_frame(now, bool(flags & 1), len(payload))
+            elif kind == MUX_ERROR:
+                said = json.loads(payload)
+                detail = f" ({said['detail']})" if said.get("detail") else ""
+                item.troubles.append((now, f"{said['reason']}{detail}"))
 
 
 async def read_mux(session, url: str, seconds: float) -> dict[int, ChannelReport]:

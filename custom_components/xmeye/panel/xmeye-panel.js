@@ -46,6 +46,14 @@ const WALL_RETRY_DELAY = 5000;
 //: are kept, because then one stalling camera does not slow the others.
 const MUX_FROM = 3;
 
+//: Why a shared-connection channel is showing nothing. The server sends the
+//: reason as a word; the sentence belongs here, where the language does.
+const WALL_TROUBLE = {
+  silent: "камера не передає відео",
+  ended: "реєстратор обірвав потік",
+  failed: "збій зв'язку з реєстратором",
+};
+
 //: Stream choices offered per tile on the wall.
 const WALL_STREAMS = [
   ["sub", "Дод."],
@@ -489,9 +497,6 @@ class XmeyePanel extends HTMLElement {
     this._wallRetries = new Map();
     //: Set when the whole wall shares one connection.
     this._wallReader = null;
-    //: Channels that have painted at least once, so the log records the moment a
-    //: tile came up instead of repeating it every second.
-    this._wallPainted = new Set();
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -507,8 +512,17 @@ class XmeyePanel extends HTMLElement {
     this._configSection = null;
     this._configValue = null;
     this._log = null;
+    //: The joint log file's contents, once fetched for viewing.
+    this._logFile = null;
     //: The rendered developer report, once it has been gathered.
     this._report = null;
+    //: Writing the panel's own events into the integration's log file. The
+    //: setting is read before anything else happens, because the window worth
+    //: recording is the one that opens as the page loads.
+    this._t0 = performance.now();
+    this._logToFile = localStorage.getItem("xmeye-log-file") === "1";
+    this._logQueue = [];
+    this._logTimer = null;
     //: Recorder settings: which group is open, what was read, and what the user
     //: has edited but not yet written.
     this._settingsGroup = SETTINGS_GROUPS[0].id;
@@ -541,11 +555,20 @@ class XmeyePanel extends HTMLElement {
     this._thumbTimer = setInterval(() => {
       if (this._live === null && this._tab === "channels") this._refreshThumbnails();
     }, THUMB_INTERVAL);
+
+    if (this._logToFile) this._logTimer = setInterval(() => this._shipLog(false), 2000);
+    // A refresh is exactly when the interesting events happen, and the last
+    // couple of seconds of them would otherwise die with the page.
+    this._unload = () => this._shipLog(true);
+    window.addEventListener("pagehide", this._unload);
   }
 
   disconnectedCallback() {
     clearInterval(this._timer);
     clearInterval(this._thumbTimer);
+    clearInterval(this._logTimer);
+    window.removeEventListener("pagehide", this._unload);
+    this._shipLog(true);
     this._stopWall();
     this._stopPlayback();
   }
@@ -821,7 +844,7 @@ class XmeyePanel extends HTMLElement {
           this._updateOsd();
         },
         (reason) => this._fallbackFromNative(reason),
-        this._diagLog,
+        this._playerLog,
         { ...this._lab }
       );
       this._native = player;
@@ -1013,10 +1036,92 @@ class XmeyePanel extends HTMLElement {
   }
 
   /** Append an event to the shared diagnostics log. */
+  /**
+   * A sink the players write their own events through.
+   *
+   * Passed instead of the log array so that a decoder configuration or a first
+   * drawn frame reaches the shared file when it happens. Handed to the players
+   * as a function, which is what tells them to call rather than append.
+   */
+  get _playerLog() {
+    if (!this._playerSink) {
+      this._playerSink = (entry) => {
+        this._diagLog.push(entry);
+        if (this._diagLog.length > 300) this._diagLog.shift();
+        if (this._logToFile) {
+          this._logQueue.push({
+            epoch: Date.now(),
+            event: entry.event,
+            detail: entry.detail,
+          });
+        }
+      };
+    }
+    return this._playerSink;
+  }
+
+  /** The same sink, with every line saying which channel it came from. */
+  _channelLog(index) {
+    return (entry) => this._playerLog({ ...entry, event: `ch${index} ${entry.event}` });
+  }
+
   _noteDiag(event, detail) {
     const at = new Date().toTimeString().slice(0, 8);
     this._diagLog.push({ at, event, ...(detail ? { detail } : {}) });
     if (this._diagLog.length > 300) this._diagLog.shift();
+    // Seconds since the panel loaded, which is what the shared file is keyed on.
+    // A blink lasts a fraction of a second, and a clock printed to the second
+    // cannot order anything inside one.
+    // Wall time, not time since load: the file's clock is the server's, and the
+    // panel may be open on another device entirely.
+    if (this._logToFile) this._logQueue.push({ epoch: Date.now(), event, detail });
+  }
+
+  /**
+   * Send what the panel has seen to the integration's own log.
+   *
+   * The file holds both sides on one clock, so the ordering of a blink can be
+   * read off the page instead of aligned by eye across two logs. Batched every
+   * couple of seconds rather than per event: the wall alone would otherwise post
+   * several times a second.
+   */
+  async _shipLog(final) {
+    if (!this._logToFile || !this._logQueue.length) return;
+    const entries = this._logQueue.splice(0, this._logQueue.length);
+    try {
+      await fetch("/api/xmeye/debug", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await this._token()}`,
+          "Content-Type": "application/json",
+        },
+        // `now` lets the server line this batch up with its own clock.
+        body: JSON.stringify({ now: Date.now(), entries }),
+        // The last batch is sent while the page is going away, and a plain
+        // request would be cancelled with it.
+        keepalive: Boolean(final),
+      });
+    } catch (err) {
+      // Put them back, unless the page is closing and there is no next time.
+      if (!final) this._logQueue.unshift(...entries);
+    }
+  }
+
+  async _setLogToFile(on) {
+    this._logToFile = on;
+    localStorage.setItem("xmeye-log-file", on ? "1" : "0");
+    clearInterval(this._logTimer);
+    // The server keeps the switch too: it writes its own half of the file, and
+    // a panel that is merely open should not make it write forever.
+    const headers = { Authorization: `Bearer ${await this._token()}` };
+    await fetch(`/api/xmeye/debug?on=${on ? 1 : 0}`, { headers });
+    if (!on) {
+      this._logQueue = [];
+      return;
+    }
+    this._logTimer = setInterval(() => this._shipLog(false), 2000);
+    this._noteDiag("журнал", "запис у файл увімкнено");
+    this._render();
   }
 
   // ------------------------------------------------------------------
@@ -1479,7 +1584,15 @@ class XmeyePanel extends HTMLElement {
    */
   async _startWallMultiplexed(wanted) {
     const { NativePlayer: Player, MultiplexReader } = await nativeModule;
-    const reader = new MultiplexReader(this._diagLog);
+    const reader = new MultiplexReader(this._playerLog, (channel, said) => {
+      if (this._wallReader !== reader) return;
+      const what = WALL_TROUBLE[said.reason] || said.reason;
+      const next = said.attempt
+        ? `спроба ${said.attempt} через ${said.retryIn}с`
+        : "відновити не вдалося";
+      this._noteDiag("стіна", `канал ${channel}: ${said.reason} ${said.detail || ""} ${next}`);
+      this._updateWallCell(channel, { error: `${what} · ${next}` });
+    });
     this._wallReader = reader;
 
     const channels = [];
@@ -1492,7 +1605,7 @@ class XmeyePanel extends HTMLElement {
         canvas,
         (stats) => this._updateWallCell(index, stats),
         () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-        this._diagLog
+        this._channelLog(index)
       );
       this._wall.set(index, player);
       reader.add(index, player);
@@ -1516,7 +1629,7 @@ class XmeyePanel extends HTMLElement {
       canvas,
       (stats) => this._updateWallCell(index, stats),
       () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-      this._diagLog
+      this._playerLog
     );
     this._wall.set(index, player);
     player
@@ -1646,7 +1759,7 @@ class XmeyePanel extends HTMLElement {
           canvas,
           (stats) => this._updateWallCell(index, stats),
           () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-          this._diagLog
+          this._playerLog
         );
         this._wall.set(index, player);
         this._wallReader.add(index, player);
@@ -1716,15 +1829,10 @@ class XmeyePanel extends HTMLElement {
     this._wall.forEach((player) => player.stop());
     this._wall.clear();
     this._wallRetries.clear();
-    this._wallPainted.clear();
   }
 
   _updateWallCell(index, stats) {
     if (stats.fps) this._wallRetries.delete(index);
-    if (stats.decoded && !this._wallPainted.has(index)) {
-      this._wallPainted.add(index);
-      this._noteDiag("стіна", `канал ${index}: перший кадр`);
-    }
     const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
     if (!foot) return;
     if (stats.error) {
@@ -1908,7 +2016,7 @@ class XmeyePanel extends HTMLElement {
         this._playback.error = reason;
         this._render();
       },
-      this._diagLog,
+      this._playerLog,
       {},
       { rate: this._playback.rate, decimated: fast }
     );
@@ -2121,9 +2229,41 @@ class XmeyePanel extends HTMLElement {
    * a prefilled issue. Secrets are stripped on the server before the report is
    * ever sent here.
    */
+  /**
+   * The joint log: both halves of the integration on one clock.
+   *
+   * Kept beside the report because it answers the other kind of question. The
+   * report says what the recorder is; this says what just happened, in order.
+   */
+  _logFileCard() {
+    const on = this._logToFile;
+    return `
+      <div class="card">
+        <h2>Спільний журнал</h2>
+        <p class="hint pad">
+          Панель і серверна частина пишуть в один файл <code>xmeye-debug.log</code>
+          поруч із конфігурацією Home Assistant, за спільним відліком часу від
+          завантаження сторінки. Так видно послідовність подій, що тривають
+          частки секунди — наприклад, чому плитка блимнула при оновленні.
+        </p>
+        <p class="hint pad">
+          Вимкнено за замовчуванням, нічого нікуди не надсилається.
+          ${on ? "Запис триває — оновіть сторінку, щоб зафіксувати запуск." : ""}
+        </p>
+        <div class="toolbar">
+          <button class="${on ? "ghost" : "primary"}" id="togglelog">
+            ${on ? "Зупинити запис" : "Почати запис"}
+          </button>
+          <button class="ghost" id="showlog">Показати файл</button>
+        </div>
+        ${this._logFile ? `<pre class="report">${escapeHtml(this._logFile)}</pre>` : ""}
+      </div>`;
+  }
+
   _debugView() {
     if (!this._report) {
       return `
+        ${this._logFileCard()}
         <div class="card">
           <h2>Звіт для розробника</h2>
           <p class="hint pad">
@@ -2139,6 +2279,7 @@ class XmeyePanel extends HTMLElement {
         </div>`;
     }
     return `
+      ${this._logFileCard()}
       <div class="card">
         <div class="toolbar">
           <button class="primary" id="copyreport">Копіювати</button>
@@ -2940,6 +3081,27 @@ class XmeyePanel extends HTMLElement {
       resetSettings.addEventListener("click", () => {
         this._settingsEdits = {};
         this._settingsNote = null;
+        this._render();
+      });
+
+    const toggleLog = root.getElementById("togglelog");
+    if (toggleLog)
+      toggleLog.addEventListener("click", () => this._setLogToFile(!this._logToFile));
+
+    const showLog = root.getElementById("showlog");
+    if (showLog)
+      showLog.addEventListener("click", async () => {
+        showLog.disabled = true;
+        // Flush first, or the file is missing the seconds just spent looking at it.
+        await this._shipLog(false);
+        try {
+          const reply = await fetch("/api/xmeye/debug", {
+            headers: { Authorization: `Bearer ${await this._token()}` },
+          }).then((r) => r.json());
+          this._logFile = reply.text || "Файл порожній.";
+        } catch (err) {
+          this._logFile = `Не вдалося прочитати: ${err.message || err}`;
+        }
         this._render();
       });
 
