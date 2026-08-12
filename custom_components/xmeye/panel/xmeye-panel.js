@@ -48,6 +48,11 @@ const MUX_FROM = 3;
 
 //: Why a shared-connection channel is showing nothing. The server sends the
 //: reason as a word; the sentence belongs here, where the language does.
+//: How long the tile watcher samples the screen for, once the log is on. Long
+//: enough to cover a wall coming up on a slow recorder, short enough that it
+//: does not follow the page around all evening.
+const TILE_WATCH = 30000;
+
 const WALL_TROUBLE = {
   silent: "камера не передає відео",
   ended: "реєстратор обірвав потік",
@@ -523,6 +528,7 @@ class XmeyePanel extends HTMLElement {
     this._logToFile = localStorage.getItem("xmeye-log-file") === "1";
     this._logQueue = [];
     this._logTimer = null;
+    this._watchTimer = null;
     //: Recorder settings: which group is open, what was read, and what the user
     //: has edited but not yet written.
     this._settingsGroup = SETTINGS_GROUPS[0].id;
@@ -556,7 +562,10 @@ class XmeyePanel extends HTMLElement {
       if (this._live === null && this._tab === "channels") this._refreshThumbnails();
     }, THUMB_INTERVAL);
 
-    if (this._logToFile) this._logTimer = setInterval(() => this._shipLog(false), 2000);
+    if (this._logToFile) {
+      this._logTimer = setInterval(() => this._shipLog(false), 2000);
+      this._noteLoad();
+    }
     // A refresh is exactly when the interesting events happen, and the last
     // couple of seconds of them would otherwise die with the page.
     this._unload = () => this._shipLog(true);
@@ -567,6 +576,7 @@ class XmeyePanel extends HTMLElement {
     clearInterval(this._timer);
     clearInterval(this._thumbTimer);
     clearInterval(this._logTimer);
+    clearInterval(this._watchTimer);
     window.removeEventListener("pagehide", this._unload);
     this._shipLog(true);
     this._stopWall();
@@ -620,6 +630,11 @@ class XmeyePanel extends HTMLElement {
 
   async _loadDetail() {
     this._loading = true;
+    // The first of these draws the shell with no channels at all, so the wall it
+    // paints is empty — the tiles arrive on the second one. That pair is worth
+    // seeing in the log, because it is a redraw between a player starting and
+    // its first frame.
+    this._renderReason = "деталі завантажуються";
     this._render();
     try {
       this._detail = await this._ws({ type: "xmeye/device", entry_id: this._entryId });
@@ -643,6 +658,7 @@ class XmeyePanel extends HTMLElement {
       this._error = err.message || String(err);
     }
     this._loading = false;
+    this._renderReason = "деталі отримано";
     this._render();
   }
 
@@ -1065,6 +1081,68 @@ class XmeyePanel extends HTMLElement {
     return (entry) => this._playerLog({ ...entry, event: `ch${index} ${entry.event}` });
   }
 
+  /** Whether anything has been drawn on a tile, judged from the pixels. */
+  _tileHasPicture(canvas) {
+    if (!canvas.width || !canvas.height) return false;
+    try {
+      const ctx = canvas.getContext("2d");
+      // Five points rather than one: a night scene is mostly black, and a single
+      // sample in a dark corner would report an empty tile for minutes.
+      const spots = [
+        [canvas.width >> 1, canvas.height >> 1],
+        [canvas.width >> 2, canvas.height >> 2],
+        [(canvas.width * 3) >> 2, canvas.height >> 2],
+        [canvas.width >> 2, (canvas.height * 3) >> 2],
+        [(canvas.width * 3) >> 2, (canvas.height * 3) >> 2],
+      ];
+      return spots.some(([x, y]) => {
+        const [r, g, b, a] = ctx.getImageData(x, y, 1, 1).data;
+        return a > 0 && r + g + b > 24;
+      });
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
+   * Watch what the tiles actually show, for as long as it takes to come up.
+   *
+   * The one thing the log could not see was the screen: every other line says
+   * what the code did, and a blink is a statement about what the viewer saw. So
+   * while the file is being written, each tile is sampled ten times a second and
+   * every change of state is recorded — picture or blank, what the caption says,
+   * how large the canvas is, whether it is still in the document. Only changes,
+   * so a steady wall costs a handful of lines.
+   */
+  _watchTiles() {
+    clearInterval(this._watchTimer);
+    if (!this._logToFile) return;
+    const seen = new Map();
+    const until = performance.now() + TILE_WATCH;
+    this._watchTimer = setInterval(() => {
+      if (performance.now() > until) {
+        clearInterval(this._watchTimer);
+        this._noteDiag("плитки", "спостереження завершено");
+        return;
+      }
+      this.shadowRoot.querySelectorAll("canvas[data-wall]").forEach((canvas) => {
+        const index = Number(canvas.dataset.wall);
+        const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
+        const state = [
+          this._tileHasPicture(canvas) ? "картинка" : "порожньо",
+          `${canvas.width}x${canvas.height}`,
+          canvas.isConnected ? "" : "ПОЗА DOM",
+          `"${foot ? foot.textContent.trim().slice(0, 44) : "немає підпису"}"`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        if (seen.get(index) === state) return;
+        seen.set(index, state);
+        this._noteDiag("плитка", `ch${index} ${state}`);
+      });
+    }, 100);
+  }
+
   _noteDiag(event, detail) {
     const at = new Date().toTimeString().slice(0, 8);
     this._diagLog.push({ at, event, ...(detail ? { detail } : {}) });
@@ -1121,7 +1199,36 @@ class XmeyePanel extends HTMLElement {
     }
     this._logTimer = setInterval(() => this._shipLog(false), 2000);
     this._noteDiag("журнал", "запис у файл увімкнено");
+    this._noteLoad();
     this._render();
+  }
+
+  /**
+   * How this page arrived: reload, back-forward cache, or a fresh visit.
+   *
+   * A restored page brings its old DOM with it and its scripts do not run
+   * again, which behaves differently enough from a reload to be worth naming
+   * before anything else in the file is read.
+   */
+  _noteLoad() {
+    const nav = performance.getEntriesByType("navigation")[0];
+    const script = performance
+      .getEntriesByType("resource")
+      .find((entry) => entry.name.includes("xmeye-panel.js"));
+    this._noteDiag(
+      "завантаження",
+      [
+        `тип ${nav ? nav.type : "?"}`,
+        nav ? `до готовності ${(nav.domContentLoadedEventEnd / 1000).toFixed(2)}с` : "",
+        // A zero transfer size with a non-zero decoded size means the browser
+        // served it from its own cache rather than from Home Assistant.
+        script
+          ? `панель ${script.transferSize === 0 ? "з кешу" : `${script.transferSize} Б`}`
+          : "панель не в переліку ресурсів",
+      ]
+        .filter(Boolean)
+        .join(", ")
+    );
   }
 
   // ------------------------------------------------------------------
@@ -1136,18 +1243,30 @@ class XmeyePanel extends HTMLElement {
     // its context, so the players carry on across the redraw and only genuine
     // differences are dialled.
     const canvases = this._liveCanvases();
+    const why = this._renderReason || "";
+    this._renderReason = null;
 
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${this._template()}`;
     this._bind();
 
     if (this._tab !== "overview" || !this._detail || this._live !== null) {
+      this._noteDiag("перемальовування", `вкладка ${this._tab}${why ? `, ${why}` : ""}`);
       this._stopWall();
       return;
     }
+    const adopted = [];
     for (const [index, canvas] of canvases) {
       const fresh = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-      if (fresh) fresh.replaceWith(canvas);
+      if (!fresh) continue;
+      fresh.replaceWith(canvas);
+      adopted.push(index);
     }
+    // A redraw is the one thing that can put a blank tile on screen while its
+    // player is mid-stream, so every one of them says what it moved and why.
+    this._noteDiag(
+      "перемальовування",
+      `стіна, полотна ${adopted.length ? adopted.join(",") : "немає"}${why ? `, ${why}` : ""}`
+    );
     this._startWall();
   }
 
@@ -1562,6 +1681,7 @@ class XmeyePanel extends HTMLElement {
       return;
     }
     this._noteDiag("стіна", `старт, каналів ${canvases.length}`);
+    this._watchTiles();
 
     // Above the browser's per-host connection limit, one stream per tile means
     // the ones past the sixth never start. Sharing a single response costs one

@@ -113,6 +113,23 @@ That is what settled why a wall comes up one tile at a time: thirteen
 milliseconds from the server announcing a channel to the browser drawing it, and
 a second and a half between the two channels. The delay is the recorder's.
 
+While the file is being written, each tile is also sampled ten times a second
+and every change of state recorded — picture or blank, what the caption reads,
+the canvas size, whether it is still in the document. Everything else in the log
+says what the code did; this says what the viewer saw, which is what a complaint
+about blinking is actually about:
+
+```
+   1.503 web   стіна     старт, каналів 3
+   1.604 web   плитка    ch0 порожньо · 300x150 · "підключення…"
+   1.826 web   ch0 first frame received 704x576
+   1.905 web   плитка    ch0 картинка · 704x576 · "576p 10fps 0.00 Mbps"
+```
+
+300x150 is a canvas with no size yet — the browser's default, before a decoder
+configures it. A tile in that state for a moment after a reload is the page
+starting, not a fault.
+
 Note what the file does **not** measure. The panel's per-tile statistics are
 published once a second, so anything derived from them is a second late — the
 first version of this log said "first frame" from that tick and made the browser

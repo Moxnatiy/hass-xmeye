@@ -458,8 +458,19 @@ export class NativePlayer {
     this.stats.codec = this.info.codec;
     this.stats.resolution = `${this.info.width}x${this.info.height}`;
     const scale = Math.min(1, MAX_CANVAS_WIDTH / Math.max(this.info.width, 1));
-    this.canvas.width = Math.round(this.info.width * scale);
-    this.canvas.height = Math.round(this.info.height * scale);
+    const width = Math.round(this.info.width * scale);
+    const height = Math.round(this.info.height * scale);
+    // Writing either dimension wipes the canvas, whether or not the value
+    // changed — so this is where a picture on screen goes black. Worth a line:
+    // a second pass through here is a visible blink and looks like nothing else.
+    this._configures = (this._configures || 0) + 1;
+    this.note(
+      "canvas sized",
+      `${width}x${height}, configure #${this._configures}` +
+        (this.stats.decoded ? `, clearing ${this.stats.decoded} drawn frames` : "")
+    );
+    this.canvas.width = width;
+    this.canvas.height = height;
 
     if (!this._configs) {
       this._configs = await this._pickConfigs(keyframe);
@@ -820,11 +831,17 @@ export class NativePlayer {
   _draw(frame) {
     // The decoder freed space, so more frames can go in.
     queueMicrotask(() => this._feed());
-    if (this.stats.decoded === 0) {
+    const first = this.stats.decoded === 0;
+    if (first) {
       this.note("first frame received", `${frame.displayWidth}x${frame.displayHeight}`);
     }
     this.stats.decoded += 1;
     this._decodedSince += 1;
+    // Statistics are published once a second, and waiting for that tick left the
+    // caption reading "connecting" under a tile that was already showing the
+    // picture — for up to a second, on every camera, on every page load. The
+    // first frame is exactly the moment the caption is wrong, so it says so now.
+    if (first) queueMicrotask(() => this._publish());
     // A configuration that holds for a long time has proven itself, so the
     // attempt counter resets; otherwise stray failures would exhaust it.
     if (
@@ -897,10 +914,17 @@ export class NativePlayer {
       { seconds: 0, bytes: 0, frames: 0 }
     );
 
-    this.stats.fps = Math.round(totals.frames / Math.max(totals.seconds, 0.001));
-    this.stats.bitrate = Math.round(
-      (totals.bytes * 8) / 1000 / Math.max(totals.seconds, 0.001)
-    );
+    // A rate needs a window to be a rate. The publish that follows the first
+    // frame arrives a few milliseconds in, and dividing a whole keyframe by that
+    // reads as a hundred frames a second and thirty megabits — a wrong figure,
+    // shown at the very moment the viewer first looks at the tile. Until there
+    // is enough of a window, the stream's own declared rate stands in.
+    if (totals.seconds < 0.5) {
+      this.stats.fps = Math.round((this.info && this.info.fps) || 0);
+    } else {
+      this.stats.fps = Math.round(totals.frames / totals.seconds);
+      this.stats.bitrate = Math.round((totals.bytes * 8) / 1000 / totals.seconds);
+    }
     this.stats.queue = this.decoder ? this.decoder.decodeQueueSize : 0;
     this.stats.backlog = this._backlog.length;
     this.stats.position = this.position;
