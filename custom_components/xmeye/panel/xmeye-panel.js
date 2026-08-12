@@ -426,6 +426,24 @@ const fmtBitrate = (kbps) => {
   return `${(kbps / 1000).toFixed(3).padStart(7, " ")} Мбіт/с`;
 };
 
+//: The height alone, the way cameras, players and everyone talking about video
+//: name a format: 640x480 is 480p whatever the aspect. The width is still there
+//: to be read off the picture, and one number leaves room for the rest of the
+//: line on a small tile.
+const fmtHeight = (resolution) => {
+  const found = /\d+\s*[x×]\s*(\d+)/.exec(resolution || "");
+  return found ? `${found[1]}p` : "—";
+};
+
+//: What a stream is doing, in one line: 480p 25fps 2.11 Mbps. The numbers keep
+//: fixed columns, so the line stays still while they change every second.
+const fmtQuality = (stats) =>
+  [
+    fmtHeight(stats.resolution),
+    `${String(stats.fps || 0).padStart(2, " ")}fps`,
+    `${((stats.bitrate || 0) / 1000).toFixed(2).padStart(4, " ")} Mbps`,
+  ].join(" ");
+
 const fmtTime = (iso) => (iso ? iso.replace("T", " ").slice(0, 19) : "—");
 const fmtDay = (iso) => (iso ? iso.slice(0, 10) : "—");
 const fmtClockFull = (iso) => (iso ? iso.replace("T", " ").slice(11, 19) : "—");
@@ -1679,8 +1697,7 @@ class XmeyePanel extends HTMLElement {
     } else if (stats.connecting) {
       foot.textContent = "підключення…";
     } else {
-      foot.textContent =
-        `${stats.resolution || "—"} · ${stats.fps || 0} к/с · ${fmtBitrate(stats.bitrate)}`;
+      foot.textContent = fmtQuality(stats);
     }
   }
 
@@ -2469,12 +2486,12 @@ class XmeyePanel extends HTMLElement {
     if (osd.codec) what.push(osd.codec.toUpperCase());
     if (osd.codecString) what.push(osd.codecString);
     if (osd.hardware && osd.hardware !== "no-preference") what.push(osd.hardware);
-    if (osd.resolution) what.push(osd.resolution);
-    what.push(osd.fps ? `${String(osd.fps).padStart(2, " ")} к/с` : "— к/с");
+    // The three that describe the picture stay together and read the same here
+    // as under a wall tile. A video element does not report bitrate, so for HLS
+    // and snapshots the value comes from the recorder itself.
+    what.push(fmtQuality({ ...osd, bitrate: osd.bitrate || channel.bitrate }));
 
-    // A video element does not report bitrate, so for HLS and snapshots the
-    // value comes from the recorder itself.
-    const how = [fmtBitrate(osd.bitrate || channel.bitrate)];
+    const how = [];
     if (osd.decoded !== undefined) {
       const total = osd.decoded + osd.dropped;
       const share = total ? ((osd.dropped / total) * 100).toFixed(1) : "0.0";
