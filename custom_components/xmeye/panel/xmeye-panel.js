@@ -3029,7 +3029,7 @@ const STYLES = `
   .wall-bar { justify-content:flex-start; }
 
   /* Channel picker: which cameras go on the wall and in what order. */
-  .picker { width:206px; flex:none; background: var(--card-background-color);
+  .picker { width:226px; flex:none; background: var(--card-background-color);
     border-radius: var(--ha-card-border-radius, 12px); overflow:hidden;
     box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.08)); }
   .picker-head { padding:7px 10px; font-size:11px; text-transform:uppercase;
@@ -3051,8 +3051,10 @@ const STYLES = `
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;
     background: var(--secondary-background-color); padding:12px; border-radius:8px; }
   .pick-list { list-style:none; margin:0; padding:3px 0; max-height:70vh; overflow:auto; }
-  .pick { display:flex; align-items:center; gap:5px; padding:1px 7px; font-size:12px;
-    line-height:1.7; cursor:grab; user-select:none; }
+  /* Half again as tall as the text needs. The row is a drag handle as much as a
+     line of text, and a 22px one was a target you could miss between neighbours. */
+  .pick { display:flex; align-items:center; gap:6px; padding:5px 8px; font-size:13px;
+    line-height:1.8; cursor:grab; user-select:none; }
   .pick:active { cursor:grabbing; }
   /* The controls in the row keep their own pointer, or the whole row reads as
      one draggable thing and the marker stops looking clickable. */
@@ -3060,9 +3062,9 @@ const STYLES = `
   .pick.off { opacity:.55; }
   .pick.dragging { opacity:.4; background: var(--divider-color); }
   /* One mark, two facts: filled means "on the wall", green means "camera online". */
-  .pick-dot { width:11px; height:11px; flex:none; padding:0; border-radius:50%;
+  .pick-dot { width:14px; height:14px; flex:none; padding:0; border-radius:50%;
     cursor:pointer; background:transparent;
-    border:1.5px solid var(--secondary-text-color); }
+    border:2px solid var(--secondary-text-color); }
   .pick-dot.online { border-color: var(--success-color, #4caf50); }
   .pick-dot.shown { background: var(--secondary-text-color); }
   .pick-dot.shown.online { background: var(--success-color, #4caf50); }
@@ -3071,14 +3073,14 @@ const STYLES = `
      beside it, and how far off depends on the font. Six dots on a 4px grid in a
      box whose sides are exact multiples of it land dead centre in any font. The
      grid is kept small so the grip stays as quiet as the glyph looked. */
-  .pick-grip { flex:none; width:6px; height:9px; user-select:none;
+  .pick-grip { flex:none; width:8px; height:12px; user-select:none;
     color: var(--secondary-text-color);
-    background-image: radial-gradient(currentColor 0.75px, transparent 1.15px);
-    background-size: 3px 3px; background-position: center; }
-  .pick-num { width:15px; text-align:right; color: var(--secondary-text-color);
+    background-image: radial-gradient(currentColor 1px, transparent 1.5px);
+    background-size: 4px 4px; background-position: center; }
+  .pick-num { width:17px; text-align:right; color: var(--secondary-text-color);
     font-variant-numeric: tabular-nums; }
   .pick-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .pick-stream { font-size:11px; padding:0 2px; max-width:52px; flex:none;
+  .pick-stream { font-size:12px; padding:1px 3px; max-width:60px; flex:none;
     background: var(--card-background-color); color: var(--primary-text-color);
     border:1px solid var(--divider-color); border-radius:4px; }
   .pick.off .pick-stream { pointer-events:none; opacity:.6; }
