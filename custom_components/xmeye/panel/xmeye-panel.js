@@ -489,6 +489,9 @@ class XmeyePanel extends HTMLElement {
     this._wallRetries = new Map();
     //: Set when the whole wall shares one connection.
     this._wallReader = null;
+    //: Channels that have painted at least once, so the log records the moment a
+    //: tile came up instead of repeating it every second.
+    this._wallPainted = new Set();
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -954,6 +957,34 @@ class XmeyePanel extends HTMLElement {
     if (channel) this._mountLiveCard(this._entityForStream(channel));
   }
 
+  /**
+   * The canvas each tile should keep across a redraw.
+   *
+   * The player's own canvas, not whichever one the document happens to hold. A
+   * player is built from a canvas found in the DOM, but a redraw can land
+   * between finding it and using it — the token refresh in the middle of
+   * starting the wall is enough — and then the player is drawing on a node no
+   * longer in the page. Asking the players makes that self-correcting: the next
+   * redraw puts their canvas back on screen. Asking the DOM instead orphans them
+   * silently, and the tile stays black with the frames arriving.
+   */
+  _liveCanvases() {
+    const canvases = new Map();
+    this.shadowRoot.querySelectorAll("canvas[data-wall]").forEach((canvas) =>
+      canvases.set(Number(canvas.dataset.wall), canvas)
+    );
+    const orphaned = [];
+    this._wall.forEach((player, index) => {
+      if (!player.canvas) return;
+      if (!player.canvas.isConnected) orphaned.push(index);
+      canvases.set(index, player.canvas);
+    });
+    // Worth a line in the log rather than a silent repair: if this appears
+    // often, a redraw is landing in the middle of starting the wall.
+    if (orphaned.length) this._noteDiag("стіна", `полотно повернуто: ${orphaned}`);
+    return canvases;
+  }
+
   /** Handlers for the wall toolbar, which a reflow replaces on its own. */
   _bindWallBar(root) {
     root.querySelectorAll(".layout").forEach((button) =>
@@ -999,10 +1030,7 @@ class XmeyePanel extends HTMLElement {
     // into the new cells instead: a canvas survives a move with its contents and
     // its context, so the players carry on across the redraw and only genuine
     // differences are dialled.
-    const canvases = new Map();
-    this.shadowRoot.querySelectorAll("canvas[data-wall]").forEach((canvas) =>
-      canvases.set(Number(canvas.dataset.wall), canvas)
-    );
+    const canvases = this._liveCanvases();
 
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${this._template()}`;
     this._bind();
@@ -1428,6 +1456,7 @@ class XmeyePanel extends HTMLElement {
       await this._syncWallPlayers(canvases.map((canvas) => Number(canvas.dataset.wall)));
       return;
     }
+    this._noteDiag("стіна", `старт, каналів ${canvases.length}`);
 
     // Above the browser's per-host connection limit, one stream per tile means
     // the ones past the sixth never start. Sharing a single response costs one
@@ -1448,14 +1477,17 @@ class XmeyePanel extends HTMLElement {
    * The reader owns the fetch and hands each record to the player that owns
    * that channel; the players do the same decoding and drawing as ever.
    */
-  async _startWallMultiplexed(canvases) {
+  async _startWallMultiplexed(wanted) {
     const { NativePlayer: Player, MultiplexReader } = await nativeModule;
     const reader = new MultiplexReader(this._diagLog);
     this._wallReader = reader;
 
     const channels = [];
-    for (const canvas of canvases) {
-      const index = Number(canvas.dataset.wall);
+    // Looked up again after the await, not carried across it: a redraw in
+    // between would have left every one of those nodes out of the document.
+    for (const stale of wanted) {
+      const index = Number(stale.dataset.wall);
+      const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`) || stale;
       const player = new Player(
         canvas,
         (stats) => this._updateWallCell(index, stats),
@@ -1555,10 +1587,7 @@ class XmeyePanel extends HTMLElement {
     const plan = this._wallPlan();
 
     // Carry over what the running tiles are showing, picture and caption both.
-    const canvases = new Map();
-    wall.querySelectorAll("canvas[data-wall]").forEach((c) =>
-      canvases.set(Number(c.dataset.wall), c)
-    );
+    const canvases = this._liveCanvases();
     const feet = new Map();
     wall.querySelectorAll(".cell-foot").forEach((f) => feet.set(f.dataset.field, f.innerHTML));
 
@@ -1601,6 +1630,7 @@ class XmeyePanel extends HTMLElement {
     const gone = running.filter((index) => !wanted.includes(index));
     const fresh = wanted.filter((index) => !this._wall.has(index));
     if (!gone.length && !fresh.length) return;
+    this._noteDiag("стіна", `узгодження: додано ${fresh}, знято ${gone}`);
 
     if (this._wallReader) {
       const { NativePlayer: Player } = await nativeModule;
@@ -1686,10 +1716,15 @@ class XmeyePanel extends HTMLElement {
     this._wall.forEach((player) => player.stop());
     this._wall.clear();
     this._wallRetries.clear();
+    this._wallPainted.clear();
   }
 
   _updateWallCell(index, stats) {
     if (stats.fps) this._wallRetries.delete(index);
+    if (stats.decoded && !this._wallPainted.has(index)) {
+      this._wallPainted.add(index);
+      this._noteDiag("стіна", `канал ${index}: перший кадр`);
+    }
     const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
     if (!foot) return;
     if (stats.error) {

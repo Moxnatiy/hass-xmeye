@@ -24,6 +24,7 @@ import json
 import logging
 import secrets
 import struct
+import time
 from datetime import datetime
 from http import HTTPStatus
 
@@ -361,6 +362,8 @@ class _MuxSession:
             stream=self.stream_type,
         )
         announced = False
+        opened = time.monotonic()
+        waited = 0
         try:
             await stream.start()
             async for frame in stream.frames():
@@ -368,7 +371,22 @@ class _MuxSession:
                     continue
                 if not announced:
                     if not frame.keyframe:
+                        # Nothing can be shown before one: a decoder is configured
+                        # from a keyframe. How long that takes is the recorder's
+                        # keyframe interval, and it is the usual reason one tile
+                        # comes up seconds after another.
+                        waited += 1
                         continue
+                    _LOGGER.debug(
+                        "Multiplex channel %s announced %sx%s %s after %.2fs "
+                        "and %d frames waiting for a keyframe",
+                        channel,
+                        frame.width,
+                        frame.height,
+                        frame.codec,
+                        time.monotonic() - opened,
+                        waited,
+                    )
                     info = json.dumps(
                         {
                             "channel": channel,
