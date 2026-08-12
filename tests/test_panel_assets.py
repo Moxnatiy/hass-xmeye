@@ -140,3 +140,35 @@ def test_dataset_reads_have_matching_attributes(source: Path) -> None:
     assert not orphans, (
         f"{source.name}: handlers read {orphans}, but no template writes them."
     )
+
+
+#: The wall methods that run while players already exist, and so reach the
+#: reconciling half of ``_startWall`` rather than its dialling half.
+_RECONCILERS = ("_syncWallPlayers", "_sendWallChannels")
+
+
+def test_wall_restart_clears_the_players_first() -> None:
+    """A wall restart asked for from a reconciler must stop the wall first.
+
+    ``_startWall`` reconciles when players exist and dials when none do, and
+    ``_syncWallPlayers`` is what reconciling calls. So a reconciler that asks for
+    a restart without clearing gets its own caller back, forever: the browser tab
+    locks up with no error, and the page has to be killed. That is not a
+    hypothetical — it happened, and the only symptom was an unresponsive panel.
+    """
+    lines = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8").splitlines()
+    method = None
+    unguarded = []
+    for number, line in enumerate(lines):
+        found = re.match(r"\s{2}(?:async\s+)?(_[A-Za-z0-9]+)\(", line)
+        if found:
+            method = found.group(1)
+        if method in _RECONCILERS and "this._startWall()" in line:
+            before = "\n".join(lines[max(0, number - 5) : number])
+            if "this._stopWall()" not in before:
+                unguarded.append(f"{method}, line {number + 1}")
+
+    assert not unguarded, (
+        f"restart without clearing the wall first: {unguarded}. Call "
+        "this._stopWall() immediately before, or _startWall comes straight back."
+    )

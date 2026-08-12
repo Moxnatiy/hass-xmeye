@@ -87,6 +87,17 @@ together rather than one at a time. For a wall that is the better failure. A
 tile switched to the main stream falls back to its own connection, since the
 shared stream carries one stream type for all of them.
 
+Editing the wall does not disturb the cameras on it. Switching a channel off,
+dragging a tile, turning the page or changing the layout used to stop every
+player and dial the recorder again — as did every routine redraw, so a wall of
+sixteen reconnected because a sensor reading changed. Now the cells are rebuilt
+as markup and the canvases of the channels that stay are moved into them: a
+canvas keeps its contents and its drawing context across a move, so its player
+never learns anything happened. Only the difference is started or stopped, and
+on the shared connection that difference is a short request naming the session
+rather than a reconnection — the recorder adds or drops that one camera and
+keeps feeding the rest.
+
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 A wall is meant to be left open, so a tile that stops is brought back rather

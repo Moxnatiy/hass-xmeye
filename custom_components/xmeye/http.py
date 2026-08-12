@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import struct
 from datetime import datetime
 from http import HTTPStatus
@@ -41,7 +42,10 @@ _FRAME_HEADER = struct.Struct("<BId")
 #: Kind 0 carries a channel's JSON stream info, kind 1 a video frame. Sixteen
 #: bytes, no padding, because the format string is little-endian throughout.
 _MUX_HEADER = struct.Struct("<BHBId")
-MUX_INFO, MUX_FRAME = 0, 1
+MUX_INFO, MUX_FRAME, MUX_HELLO = 0, 1, 2
+
+#: Where live multiplex sessions are found by the endpoint that edits them.
+MUX_SESSIONS = f"{DOMAIN}_mux_sessions"
 
 #: How many records may wait for the writer before a channel starts shedding.
 #: One socket carries every tile, so a camera that outruns the browser must not
@@ -293,6 +297,114 @@ class XmeyePlaybackView(HomeAssistantView):
 
 
 
+class _MuxSession:
+    """The channels one multiplexed response is currently carrying.
+
+    A wall is edited while it runs — a channel is switched off, another joins,
+    the tiles are reordered. Rebuilding the response for that would drop every
+    camera to bring one back, so the set of channels is instead editable in
+    place: each channel is a task feeding the shared queue, and adding or
+    removing one leaves the others untouched.
+    """
+
+    def __init__(self, entry, stream_type: StreamType, queue: asyncio.Queue) -> None:
+        self.entry = entry
+        self.stream_type = stream_type
+        self.queue = queue
+        self.pumps: dict[int, asyncio.Task] = {}
+
+    @property
+    def channels(self) -> set[int]:
+        return set(self.pumps)
+
+    def add(self, channel: int) -> None:
+        if channel in self.pumps:
+            return
+        self.pumps[channel] = asyncio.create_task(self._pump(channel))
+
+    def drop(self, channel: int) -> None:
+        task = self.pumps.pop(channel, None)
+        if task is not None:
+            task.cancel()
+
+    def set_channels(self, channels: list[int]) -> None:
+        dropped = self.channels - set(channels)
+        added = set(channels) - self.channels
+        for channel in dropped:
+            self.drop(channel)
+        for channel in channels:
+            self.add(channel)
+        if dropped or added:
+            _LOGGER.debug(
+                "Multiplex session now carries %s (added %s, dropped %s)",
+                sorted(self.channels),
+                sorted(added),
+                sorted(dropped),
+            )
+
+    async def close(self) -> None:
+        pumps = list(self.pumps.values())
+        self.pumps.clear()
+        for task in pumps:
+            task.cancel()
+        await asyncio.gather(*pumps, return_exceptions=True)
+
+    async def _pump(self, channel: int) -> None:
+        """One channel: its own recorder connection, into the shared queue."""
+        entry = self.entry
+        stream = LiveStream(
+            entry.data["host"],
+            username=entry.data["username"],
+            password=entry.data["password"],
+            port=entry.data["port"],
+            channel=channel,
+            stream=self.stream_type,
+        )
+        announced = False
+        try:
+            await stream.start()
+            async for frame in stream.frames():
+                if not frame.is_video or not frame.has_valid_nal:
+                    continue
+                if not announced:
+                    if not frame.keyframe:
+                        continue
+                    info = json.dumps(
+                        {
+                            "channel": channel,
+                            "codec": frame.codec,
+                            "width": frame.width,
+                            "height": frame.height,
+                            "fps": frame.fps or 25,
+                        }
+                    ).encode()
+                    await self.queue.put((MUX_INFO, channel, 0, 0.0, info))
+                    announced = True
+
+                stamp = (frame.timestamp or datetime.now()).timestamp() * 1000
+                record = (
+                    MUX_FRAME,
+                    channel,
+                    1 if frame.keyframe else 0,
+                    stamp,
+                    frame.payload,
+                )
+                try:
+                    self.queue.put_nowait(record)
+                except asyncio.QueueFull:
+                    # The browser is behind. Dropping a delta frame leaves a gap
+                    # the decoder recovers from at the next keyframe; blocking
+                    # here would hold up every other camera.
+                    if frame.keyframe:
+                        await self.queue.put(record)
+        except (asyncio.CancelledError, ConnectionResetError):
+            raise
+        except XmeyeError as err:
+            _LOGGER.debug("Multiplexed channel %s stopped: %s", channel, err)
+        finally:
+            await stream.close()
+
+
 class XmeyeMultiplexView(HomeAssistantView):
     """Every requested channel over a single HTTP response.
 
@@ -305,6 +417,9 @@ class XmeyeMultiplexView(HomeAssistantView):
     The cost is a shared pipe: if the browser reads slowly every tile slows
     together, where separate connections would stall one at a time. For a wall
     that is the better failure — even degradation beats six alive and ten dead.
+
+    The first record names a session id, which the companion control endpoint
+    uses to edit the channel set while the response keeps running.
     """
 
     url = "/api/xmeye/native/{entry_id}"
@@ -319,9 +434,8 @@ class XmeyeMultiplexView(HomeAssistantView):
         if coordinator is None:
             return web.Response(status=HTTPStatus.NOT_FOUND, text="Recorder not found")
 
-        raw = request.query.get("channels", "")
         try:
-            channels = [int(part) for part in raw.split(",") if part != ""]
+            channels = _parse_channels(request.query.get("channels", ""))
         except ValueError:
             return web.Response(status=HTTPStatus.BAD_REQUEST, text="Invalid channels")
         if not channels:
@@ -329,7 +443,6 @@ class XmeyeMultiplexView(HomeAssistantView):
 
         wanted = request.query.get("stream", "sub")
         stream_type = StreamType.MAIN if wanted == STREAM_MAIN else StreamType.EXTRA1
-        entry = coordinator.config_entry
 
         response = web.StreamResponse(
             status=HTTPStatus.OK,
@@ -342,64 +455,15 @@ class XmeyeMultiplexView(HomeAssistantView):
         await response.prepare(request)
 
         queue: asyncio.Queue[tuple[int, int, int, float, bytes]] = asyncio.Queue(MUX_QUEUE)
+        session = _MuxSession(coordinator.config_entry, stream_type, queue)
+        token = secrets.token_urlsafe(12)
+        self.hass.data.setdefault(MUX_SESSIONS, {})[token] = session
         sent = 0
 
-        async def pump(channel: int) -> None:
-            """One channel: its own recorder connection, into the shared queue."""
-            stream = LiveStream(
-                entry.data["host"],
-                username=entry.data["username"],
-                password=entry.data["password"],
-                port=entry.data["port"],
-                channel=channel,
-                stream=stream_type,
-            )
-            announced = False
-            try:
-                await stream.start()
-                async for frame in stream.frames():
-                    if not frame.is_video or not frame.has_valid_nal:
-                        continue
-                    if not announced:
-                        if not frame.keyframe:
-                            continue
-                        info = json.dumps(
-                            {
-                                "channel": channel,
-                                "codec": frame.codec,
-                                "width": frame.width,
-                                "height": frame.height,
-                                "fps": frame.fps or 25,
-                            }
-                        ).encode()
-                        await queue.put((MUX_INFO, channel, 0, 0.0, info))
-                        announced = True
-
-                    stamp = (frame.timestamp or datetime.now()).timestamp() * 1000
-                    record = (
-                        MUX_FRAME,
-                        channel,
-                        1 if frame.keyframe else 0,
-                        stamp,
-                        frame.payload,
-                    )
-                    try:
-                        queue.put_nowait(record)
-                    except asyncio.QueueFull:
-                        # The browser is behind. Dropping a delta frame leaves a
-                        # gap the decoder recovers from at the next keyframe;
-                        # blocking here would hold up every other camera.
-                        if frame.keyframe:
-                            await queue.put(record)
-            except (asyncio.CancelledError, ConnectionResetError):
-                raise
-            except XmeyeError as err:
-                _LOGGER.debug("Multiplexed channel %s stopped: %s", channel, err)
-            finally:
-                await stream.close()
-
-        pumps = [asyncio.create_task(pump(channel)) for channel in channels]
         try:
+            hello = json.dumps({"session": token}).encode()
+            await response.write(_MUX_HEADER.pack(MUX_HELLO, 0, 0, len(hello), 0.0) + hello)
+            session.set_channels(channels)
             while True:
                 kind, channel, flags, stamp, payload = await queue.get()
                 await response.write(
@@ -409,17 +473,58 @@ class XmeyeMultiplexView(HomeAssistantView):
         except (asyncio.CancelledError, ConnectionResetError):
             _LOGGER.debug("Multiplexed stream for %s closed by the client", entry_id)
         finally:
-            for task in pumps:
-                task.cancel()
-            await asyncio.gather(*pumps, return_exceptions=True)
-            _LOGGER.debug(
-                "Multiplexed stream for %s: %d records over %d channels",
-                entry_id,
-                sent,
-                len(channels),
-            )
+            self.hass.data.get(MUX_SESSIONS, {}).pop(token, None)
+            await session.close()
+            _LOGGER.debug("Multiplexed stream for %s: %d records", entry_id, sent)
 
         return response
+
+
+class XmeyeMultiplexControlView(HomeAssistantView):
+    """Edit the channel set of a running multiplexed response.
+
+    A browser cannot write to a request whose response it is already reading,
+    so the change arrives on its own short request naming the session — the same
+    split the vendor app uses. What comes back is the set the session now holds.
+    """
+
+    url = "/api/xmeye/native/{entry_id}/mux"
+    name = "api:xmeye:native:mux:control"
+    requires_auth = True
+
+    async def post(self, request: web.Request, entry_id: str) -> web.Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({"error": "Invalid body"}, status=HTTPStatus.BAD_REQUEST)
+
+        session = request.app["hass"].data.get(MUX_SESSIONS, {}).get(body.get("session"))
+        if session is None:
+            # The response it belonged to is gone; the client reopens instead.
+            return web.json_response({"error": "Unknown session"}, status=HTTPStatus.NOT_FOUND)
+
+        try:
+            channels = _parse_channels(body.get("channels", ""))
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Invalid channels"}, status=HTTPStatus.BAD_REQUEST)
+        if not channels:
+            return web.json_response({"error": "No channels"}, status=HTTPStatus.BAD_REQUEST)
+
+        session.set_channels(channels)
+        return web.json_response({"channels": sorted(session.channels)})
+
+
+def _parse_channels(raw) -> list[int]:
+    """Channel numbers from a comma-separated string or a list, in order."""
+    parts = raw.split(",") if isinstance(raw, str) else raw
+    seen: list[int] = []
+    for part in parts:
+        if part == "":
+            continue
+        index = int(part)
+        if index not in seen:
+            seen.append(index)
+    return seen
 
 
 def async_register_http(hass: HomeAssistant) -> None:
@@ -430,3 +535,4 @@ def async_register_http(hass: HomeAssistant) -> None:
     hass.http.register_view(XmeyeNativeStreamView(hass))
     hass.http.register_view(XmeyePlaybackView(hass))
     hass.http.register_view(XmeyeMultiplexView(hass))
+    hass.http.register_view(XmeyeMultiplexControlView())

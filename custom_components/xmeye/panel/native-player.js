@@ -915,6 +915,7 @@ export class NativePlayer {
 const MUX_HEADER_BYTES = 16;
 const MUX_INFO = 0;
 const MUX_FRAME = 1;
+const MUX_HELLO = 2;
 
 /**
  * One connection carrying every tile of the wall.
@@ -929,13 +930,28 @@ export class MultiplexReader {
     this.log = sharedLog || [];
     this.controller = new AbortController();
     this.bytes = 0;
+    //: Named by the server in the first record, so the channel set of this
+    //: response can be edited without reopening it.
+    this.session = null;
+    //: Settles once the session is known, or once the reader stops without
+    //: ever learning it — a caller waiting on it is never left hanging.
+    this.ready = new Promise((resolve) => (this._announce = resolve));
   }
 
   add(channel, player) {
     this.players.set(channel, player);
   }
 
+  /** Drop one channel's player. Records for it are ignored from here on. */
+  remove(channel) {
+    const player = this.players.get(channel);
+    if (!player) return;
+    player.stop();
+    this.players.delete(channel);
+  }
+
   stop() {
+    this._announce();
     this.controller.abort();
     this.players.forEach((player) => player.stop());
     this.players.clear();
@@ -947,6 +963,7 @@ export class MultiplexReader {
       signal: this.controller.signal,
     });
     if (!response.ok) {
+      this._announce();
       throw new Error(`${response.status} ${await response.text()}`);
     }
 
@@ -975,6 +992,10 @@ export class MultiplexReader {
           const stamp = view.getFloat64(8, true);
           if (buffer.length < MUX_HEADER_BYTES + length) break;
           const payload = buffer.subarray(MUX_HEADER_BYTES, MUX_HEADER_BYTES + length);
+          if (kind === MUX_HELLO) {
+            this.session = JSON.parse(new TextDecoder().decode(payload)).session;
+            this._announce(this.session);
+          }
           const player = this.players.get(channel);
           if (player) {
             if (kind === MUX_INFO) {
@@ -989,6 +1010,8 @@ export class MultiplexReader {
       }
     } catch (err) {
       if (err.name !== "AbortError") throw err;
+    } finally {
+      this._announce(this.session);
     }
   }
 }

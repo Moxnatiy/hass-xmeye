@@ -913,6 +913,33 @@ class XmeyePanel extends HTMLElement {
     if (channel) this._mountLiveCard(this._entityForStream(channel));
   }
 
+  /** Handlers for the wall toolbar, which a reflow replaces on its own. */
+  _bindWallBar(root) {
+    root.querySelectorAll(".layout").forEach((button) =>
+      button.addEventListener("click", () => {
+        this._layout = Number(button.dataset.layout);
+        this._wallPage = 0;
+        localStorage.setItem("xmeye-layout", String(this._layout));
+        // A different layout shows a different set of tiles, so this one goes
+        // through a reflow too rather than reconnecting the cameras that stay.
+        this._reflowWall();
+      })
+    );
+
+    const prev = root.getElementById("wallprev");
+    if (prev)
+      prev.addEventListener("click", () => {
+        this._wallPage = Math.max(0, this._wallPage - 1);
+        this._reflowWall();
+      });
+    const next = root.getElementById("wallnext");
+    if (next)
+      next.addEventListener("click", () => {
+        this._wallPage += 1;
+        this._reflowWall();
+      });
+  }
+
   /** Append an event to the shared diagnostics log. */
   _noteDiag(event, detail) {
     const at = new Date().toTimeString().slice(0, 8);
@@ -925,14 +952,29 @@ class XmeyePanel extends HTMLElement {
   // ------------------------------------------------------------------
 
   _render() {
-    // The wall holds connections to the recorder, so it must stop before a
-    // redraw; otherwise every render would leak one player per channel.
-    this._stopWall();
+    // Every recorder poll ends in a redraw, and a redraw used to stop the whole
+    // wall and dial it again — sixteen cameras reconnecting because a
+    // temperature reading changed. The canvases are taken out first and put back
+    // into the new cells instead: a canvas survives a move with its contents and
+    // its context, so the players carry on across the redraw and only genuine
+    // differences are dialled.
+    const canvases = new Map();
+    this.shadowRoot.querySelectorAll("canvas[data-wall]").forEach((canvas) =>
+      canvases.set(Number(canvas.dataset.wall), canvas)
+    );
+
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${this._template()}`;
     this._bind();
-    if (this._tab === "overview" && this._detail && this._live === null) {
-      this._startWall();
+
+    if (this._tab !== "overview" || !this._detail || this._live !== null) {
+      this._stopWall();
+      return;
     }
+    for (const [index, canvas] of canvases) {
+      const fresh = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+      if (fresh) fresh.replaceWith(canvas);
+    }
+    this._startWall();
   }
 
   _template() {
@@ -1042,22 +1084,40 @@ class XmeyePanel extends HTMLElement {
    * wall reads as one canvas.
    */
   _overview() {
+    const plan = this._wallPlan();
+    return `
+      ${this._wallBar(plan)}
+      <div class="wall-layout">
+        ${this._wallPicker(plan.sequence)}
+        <div class="wall" style="--columns:${plan.layout.columns};--rows:${plan.layout.rows}">
+          ${this._wallCells(plan)}
+        </div>
+      </div>`;
+  }
+
+  /** What the wall shows right now: the order, the layout and the current page. */
+  _wallPlan() {
     const enabled = this._detail.channels.filter((c) => c.enabled);
     const sequence = this._wallSequence(enabled);
     const channels = this._wallVisible(enabled);
     const layout = LAYOUTS.find((l) => l.id === this._layout) || LAYOUTS[1];
     const pages = Math.max(1, Math.ceil(channels.length / layout.id));
     this._wallPage = Math.min(this._wallPage, pages - 1);
-
     const shown = channels.slice(this._wallPage * layout.id, (this._wallPage + 1) * layout.id);
+    return { sequence, channels, layout, pages, shown };
+  }
+
+  _wallCells({ layout, shown }) {
     // Empty slots stay visible so the wall does not jump when a channel appears.
-    const cells = [
+    return [
       ...shown.map((c, i) => this._wallTile(c, layout, i)),
       ...Array.from({ length: layout.id - shown.length }, (_, i) =>
         this._emptyCell(layout, shown.length + i)
       ),
-    ];
+    ].join("");
+  }
 
+  _wallBar({ channels, pages }) {
     return `
       <div class="toolbar wall-bar">
         <div class="layouts">
@@ -1077,12 +1137,6 @@ class XmeyePanel extends HTMLElement {
             : ""
         }
         <div class="hint">${channels.length} з ${this._detail.device.channels} каналів на стіні</div>
-      </div>
-      <div class="wall-layout">
-        ${this._wallPicker(sequence)}
-        <div class="wall" style="--columns:${layout.columns};--rows:${layout.rows}">
-          ${cells.join("")}
-        </div>
       </div>`;
   }
 
@@ -1188,7 +1242,7 @@ class XmeyePanel extends HTMLElement {
     if (order.join() === prefs.order.join()) return;
     prefs.order = order;
     this._saveWallPrefs();
-    this._render();
+    this._reflowWall();
   }
 
   /**
@@ -1263,7 +1317,23 @@ class XmeyePanel extends HTMLElement {
     else hidden.splice(at, 1);
     this._wallPage = 0;
     this._saveWallPrefs();
-    this._render();
+
+    // The row itself only changes state, so it is repainted rather than rebuilt;
+    // rebuilding the list would drop the drag bindings with it.
+    const shown = !hidden.includes(index);
+    const row = this.shadowRoot.querySelector(`.pick[data-index="${index}"]`);
+    if (row) {
+      row.classList.toggle("on", shown);
+      row.classList.toggle("off", !shown);
+      const dot = row.querySelector(".pick-dot");
+      dot.classList.toggle("shown", shown);
+      dot.title = shown
+        ? dot.classList.contains("online")
+          ? "На стіні, канал онлайн"
+          : "На стіні, канал офлайн"
+        : "Не на стіні";
+    }
+    this._reflowWall();
   }
 
 
@@ -1292,14 +1362,25 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
-  /** Start wall players for every enabled channel. */
+  /**
+   * Bring the wall up, or bring an already running one in line.
+   *
+   * Called after every redraw, so the common case is that nothing changed and
+   * there is nothing to do. Only an empty wall is dialled from scratch.
+   */
   async _startWall() {
-    this._stopWall();
     const { nativePlayerSupported: supported } = await nativeModule;
     if (!supported()) return;
 
     const canvases = [...this.shadowRoot.querySelectorAll("canvas[data-wall]")];
-    if (!canvases.length) return;
+    if (!canvases.length) {
+      this._stopWall();
+      return;
+    }
+    if (this._wall.size) {
+      await this._syncWallPlayers(canvases.map((canvas) => Number(canvas.dataset.wall)));
+      return;
+    }
 
     // Above the browser's per-host connection limit, one stream per tile means
     // the ones past the sixth never start. Sharing a single response costs one
@@ -1404,6 +1485,150 @@ class XmeyePanel extends HTMLElement {
     if (!canvas) return;
     this._updateWallCell(index, { connecting: true });
     await this._startWallTile(canvas);
+  }
+
+  /**
+   * Redraw the wall without disturbing the cameras that stay on it.
+   *
+   * Switching one channel off or dragging a tile changes what is on screen, not
+   * what the other cameras are doing — yet a redraw stops every player and
+   * reconnects, so a change touching one tile blacks out all of them for a
+   * second or more. Here the cells are rebuilt as markup and the canvases of the
+   * channels that remain are moved into them: a canvas keeps its contents and
+   * its context across a move, so its player never learns anything happened.
+   * Only the difference is then started or stopped.
+   */
+  async _reflowWall() {
+    const root = this.shadowRoot;
+    const wall = root.querySelector(".wall");
+    if (!wall || this._tab !== "overview" || this._live !== null || !this._detail) {
+      this._render();
+      return;
+    }
+    const plan = this._wallPlan();
+
+    // Carry over what the running tiles are showing, picture and caption both.
+    const canvases = new Map();
+    wall.querySelectorAll("canvas[data-wall]").forEach((c) =>
+      canvases.set(Number(c.dataset.wall), c)
+    );
+    const feet = new Map();
+    wall.querySelectorAll(".cell-foot").forEach((f) => feet.set(f.dataset.field, f.innerHTML));
+
+    wall.style.setProperty("--columns", plan.layout.columns);
+    wall.style.setProperty("--rows", plan.layout.rows);
+    wall.innerHTML = this._wallCells(plan);
+
+    for (const [index, canvas] of canvases) {
+      const fresh = wall.querySelector(`canvas[data-wall="${index}"]`);
+      if (fresh) fresh.replaceWith(canvas);
+    }
+    wall.querySelectorAll(".cell-foot").forEach((foot) => {
+      const kept = feet.get(foot.dataset.field);
+      if (kept !== undefined && this._wall.has(Number(foot.dataset.field.slice(4)))) {
+        foot.innerHTML = kept;
+      }
+    });
+    wall.querySelectorAll(".cell[data-channel]").forEach((cell) =>
+      cell.addEventListener("click", () => this._openLive(Number(cell.dataset.channel)))
+    );
+
+    // The pager and the count belong to the toolbar, which is cheap to replace.
+    const bar = root.querySelector(".wall-bar");
+    if (bar) {
+      bar.outerHTML = this._wallBar(plan);
+      this._bindWallBar(root);
+    }
+
+    await this._syncWallPlayers(plan.shown.map((c) => c.index));
+  }
+
+  /**
+   * Bring the running players in line with the tiles now on the wall.
+   *
+   * On the shared connection this is a message rather than a reconnection: the
+   * server adds or drops that camera and keeps feeding the rest.
+   */
+  async _syncWallPlayers(wanted) {
+    const running = [...this._wall.keys()];
+    const gone = running.filter((index) => !wanted.includes(index));
+    const fresh = wanted.filter((index) => !this._wall.has(index));
+    if (!gone.length && !fresh.length) return;
+
+    if (this._wallReader) {
+      const { NativePlayer: Player } = await nativeModule;
+      gone.forEach((index) => {
+        this._wallReader.remove(index);
+        this._wall.delete(index);
+        this._wallRetries.delete(index);
+      });
+      for (const index of fresh) {
+        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+        if (!canvas) continue;
+        const player = new Player(
+          canvas,
+          (stats) => this._updateWallCell(index, stats),
+          () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
+          this._diagLog
+        );
+        this._wall.set(index, player);
+        this._wallReader.add(index, player);
+      }
+      await this._sendWallChannels();
+      return;
+    }
+
+    gone.forEach((index) => {
+      const player = this._wall.get(index);
+      if (player) player.stop();
+      this._wall.delete(index);
+      this._wallRetries.delete(index);
+    });
+    // Growing past the point where separate connections stop fitting is the one
+    // case that has to start over, because the whole wall changes transport. The
+    // players are cleared first: _startWall reconciles a wall that still has
+    // any, and reconciling is what led here.
+    if (this._wall.size + fresh.length >= MUX_FROM) {
+      this._stopWall();
+      await this._startWall();
+      return;
+    }
+    for (const index of fresh) {
+      const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+      if (canvas) await this._startWallTile(canvas);
+    }
+  }
+
+  /**
+   * Tell the running response which channels it should carry.
+   *
+   * A browser cannot write into a request whose response it is still reading,
+   * so the change goes out on its own short request naming the session — the
+   * same split the vendor app uses over its own socket pair.
+   */
+  async _sendWallChannels() {
+    const reader = this._wallReader;
+    if (!reader) return;
+    await reader.ready;
+    if (!reader.session || this._wallReader !== reader) return;
+
+    const channels = [...this._wall.keys()];
+    const response = await fetch(`/api/xmeye/native/${this._entryId}/mux`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await this._token()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session: reader.session, channels }),
+    });
+    if (response.ok || this._wallReader !== reader) return;
+    // The session is gone — the response ended under us. A fresh one is the only
+    // way back, and that is the case a restart is actually for. Clearing first
+    // matters for the same reason as above: _startWall reconciles a wall that
+    // still has players, and reconciling is what brought us here.
+    this._noteDiag("стіна", "сесія втрачена, перепідключення");
+    this._stopWall();
+    await this._startWall();
   }
 
   _stopWall() {
@@ -2445,14 +2670,7 @@ class XmeyePanel extends HTMLElement {
     const search = root.getElementById("search");
     if (search) search.addEventListener("click", () => this._loadRecordings());
 
-    root.querySelectorAll(".layout").forEach((button) =>
-      button.addEventListener("click", () => {
-        this._layout = Number(button.dataset.layout);
-        this._wallPage = 0;
-        localStorage.setItem("xmeye-layout", String(this._layout));
-        this._render();
-      })
-    );
+    this._bindWallBar(root);
 
     root.querySelectorAll("[data-pick]").forEach((button) =>
       button.addEventListener("click", () =>
@@ -2468,19 +2686,6 @@ class XmeyePanel extends HTMLElement {
 
     const pickList = root.querySelector(".pick-list");
     if (pickList) this._bindWallDrag(pickList);
-
-    const prev = root.getElementById("wallprev");
-    if (prev)
-      prev.addEventListener("click", () => {
-        this._wallPage = Math.max(0, this._wallPage - 1);
-        this._render();
-      });
-    const next = root.getElementById("wallnext");
-    if (next)
-      next.addEventListener("click", () => {
-        this._wallPage += 1;
-        this._render();
-      });
 
     root.querySelectorAll(".cell[data-channel]").forEach((cell) =>
       cell.addEventListener("click", () => this._openLive(Number(cell.dataset.channel)))
