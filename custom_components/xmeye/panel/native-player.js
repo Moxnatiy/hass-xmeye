@@ -282,12 +282,20 @@ export class NativePlayer {
     this.info = info;
     this._needsConfigure = true;
     this.note("stream header", JSON.stringify(info));
+    // The rate window opens now, not when the player was constructed: on a
+    // shared connection a channel can be added minutes later, and the idle wait
+    // would otherwise be averaged in as a stretch of no traffic.
+    this._since = performance.now();
     this._tick = setInterval(() => this._publish(), 1000);
   }
 
   /** Hand one frame to a player that is being fed from outside. */
   async pushFrame(payload, keyframe, stamp) {
     if (this.controller.signal.aborted) return;
+    // A player that fetches for itself weighs the stream as it reads it. A fed
+    // one never reads, so its bytes are counted here instead — otherwise every
+    // tile on the shared connection reports no bitrate at all.
+    this._bytes += payload.length;
     if (this._needsConfigure) {
       // The decoder is configured from a keyframe, because that is what carries
       // the parameter sets the profile and level are read from.

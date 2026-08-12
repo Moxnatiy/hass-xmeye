@@ -656,13 +656,15 @@ class XmeyePanel extends HTMLElement {
 
   async _loadRecordings() {
     const day = this._recordingsDay;
+    const channel = this._selectedChannel;
     this._recordings = { loading: true };
+    this._stopPlayback();
     this._render();
     try {
       this._recordings = await this._ws({
         type: "xmeye/recordings",
         entry_id: this._entryId,
-        channel: this._selectedChannel,
+        channel,
         start: `${day}T00:00:00`,
         end: `${day}T23:59:59`,
       });
@@ -670,6 +672,27 @@ class XmeyePanel extends HTMLElement {
       this._recordings = { error: err.message || String(err) };
     }
     this._render();
+    // A query that came back while the user had already moved on belongs to
+    // nothing on screen, so it must not seize the player.
+    if (channel !== this._selectedChannel || day !== this._recordingsDay) return;
+    this._playEarliestRecording();
+  }
+
+  /**
+   * Open the day's first recording at once.
+   *
+   * A timeline with nothing playing asks the viewer to guess where the video is
+   * before showing any — and on a day with three hundred fragments the guess is
+   * usually a gap. Starting at the earliest one means the archive answers with
+   * a picture, and the timeline is then for moving, not for finding.
+   */
+  _playEarliestRecording() {
+    const list = this._recordings && this._recordings.recordings;
+    if (!list || !list.length) return;
+    const earliest = list.reduce((first, item) =>
+      new Date(item.begin) < new Date(first.begin) ? item : first
+    );
+    this._startPlayback(new Date(earliest.begin));
   }
 
   async _loadConfigTree() {
@@ -1160,10 +1183,11 @@ class XmeyePanel extends HTMLElement {
           : "На стіні, канал офлайн"
         : "Не на стіні";
       return `
-        <li class="pick ${shown ? "on" : "off"}" data-index="${channel.index}">
+        <li class="pick ${shown ? "on" : "off"}" data-index="${channel.index}"
+            title="Перетягніть рядок, щоб змінити порядок">
           <button class="pick-dot ${shown ? "shown" : ""} ${channel.online ? "online" : ""}"
                   data-pick="${channel.index}" title="${state}"></button>
-          <span class="pick-grip" title="Перетягніть, щоб змінити порядок"></span>
+          <span class="pick-grip"></span>
           <span class="pick-num">${channel.index + 1}</span>
           <span class="pick-name" title="${channel.name}">${channel.name}</span>
           <select class="pick-stream" data-stream="${channel.index}"
@@ -1193,12 +1217,17 @@ class XmeyePanel extends HTMLElement {
   _bindWallDrag(list) {
     let dragging = null;
 
-    list.querySelectorAll(".pick-grip").forEach((grip) => {
-      const row = grip.closest(".pick");
-      const arm = () => (row.draggable = true);
-      grip.addEventListener("mousedown", arm);
-      grip.addEventListener("touchstart", arm, { passive: true });
-    });
+    // The whole row starts a drag, not just the grip: the grip is four pixels
+    // wide and missing it landed on the name, which selected the text instead of
+    // moving anything. The two controls in the row are excluded, because a press
+    // on them is a click.
+    const arm = (event) => {
+      const row = event.target.closest(".pick");
+      if (!row || event.target.closest(".pick-dot, .pick-stream")) return;
+      row.draggable = true;
+    };
+    list.addEventListener("mousedown", arm);
+    list.addEventListener("touchstart", arm, { passive: true });
 
     // A press that never became a drag must disarm the row again, or it stays
     // draggable and the select inside it becomes hard to use.
@@ -2639,6 +2668,12 @@ class XmeyePanel extends HTMLElement {
           this._loadSettings();
           return;
         }
+        // Same for the archive: the timeline has nothing to show until the day
+        // is queried, so opening the tab starts that.
+        if (this._tab === "archive" && !this._recordings) {
+          this._loadRecordings();
+          return;
+        }
         this._render();
       })
     );
@@ -2662,10 +2697,17 @@ class XmeyePanel extends HTMLElement {
     if (channel)
       channel.addEventListener("change", () => {
         this._selectedChannel = Number(channel.value);
+        // The recordings on screen belong to the camera that was chosen before,
+        // so the switch fetches this one's and plays them.
+        this._loadRecordings();
       });
 
     const day = root.getElementById("day");
-    if (day) day.addEventListener("change", () => (this._recordingsDay = day.value));
+    if (day)
+      day.addEventListener("change", () => {
+        this._recordingsDay = day.value;
+        this._loadRecordings();
+      });
 
     const search = root.getElementById("search");
     if (search) search.addEventListener("click", () => this._loadRecordings());
@@ -3010,7 +3052,11 @@ const STYLES = `
     background: var(--secondary-background-color); padding:12px; border-radius:8px; }
   .pick-list { list-style:none; margin:0; padding:3px 0; max-height:70vh; overflow:auto; }
   .pick { display:flex; align-items:center; gap:5px; padding:1px 7px; font-size:12px;
-    line-height:1.7; }
+    line-height:1.7; cursor:grab; user-select:none; }
+  .pick:active { cursor:grabbing; }
+  /* The controls in the row keep their own pointer, or the whole row reads as
+     one draggable thing and the marker stops looking clickable. */
+  .pick-dot, .pick-stream { cursor:pointer; user-select:auto; }
   .pick.off { opacity:.55; }
   .pick.dragging { opacity:.4; background: var(--divider-color); }
   /* One mark, two facts: filled means "on the wall", green means "camera online". */
@@ -3025,11 +3071,10 @@ const STYLES = `
      beside it, and how far off depends on the font. Six dots on a 4px grid in a
      box whose sides are exact multiples of it land dead centre in any font. The
      grid is kept small so the grip stays as quiet as the glyph looked. */
-  .pick-grip { flex:none; width:6px; height:9px; cursor:grab; user-select:none;
+  .pick-grip { flex:none; width:6px; height:9px; user-select:none;
     color: var(--secondary-text-color);
     background-image: radial-gradient(currentColor 0.75px, transparent 1.15px);
     background-size: 3px 3px; background-position: center; }
-  .pick-grip:active { cursor:grabbing; }
   .pick-num { width:15px; text-align:right; color: var(--secondary-text-color);
     font-variant-numeric: tabular-nums; }
   .pick-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
