@@ -271,6 +271,34 @@ export class NativePlayer {
     this._t0 = performance.now();
   }
 
+  /**
+   * Run without owning a connection: frames arrive from a multiplexer.
+   *
+   * The wall shares one response across every tile, so the fetch belongs to the
+   * reader rather than to each player. Everything after the bytes arrive — the
+   * decoder search, the pacing, the drawing — is the same either way.
+   */
+  startFed(info) {
+    this.info = info;
+    this._needsConfigure = true;
+    this.note("stream header", JSON.stringify(info));
+    this._tick = setInterval(() => this._publish(), 1000);
+  }
+
+  /** Hand one frame to a player that is being fed from outside. */
+  async pushFrame(payload, keyframe, stamp) {
+    if (this.controller.signal.aborted) return;
+    if (this._needsConfigure) {
+      // The decoder is configured from a keyframe, because that is what carries
+      // the parameter sets the profile and level are read from.
+      if (!keyframe) return;
+      this._needsConfigure = false;
+      this._first = payload;
+      if (!(await this._configure(payload))) return;
+    }
+    this._enqueue(payload, keyframe, stamp);
+  }
+
   /** Record an event in the diagnostics log. */
   note(event, detail) {
     const at = ((performance.now() - this._t0) / 1000).toFixed(2);
@@ -878,5 +906,89 @@ export class NativePlayer {
       }
     }
     this.decoder = null;
+  }
+}
+
+
+//: Record layout of the multiplexed stream: kind, channel, flags, length,
+//: timestamp. Sixteen bytes, matching _MUX_HEADER on the server.
+const MUX_HEADER_BYTES = 16;
+const MUX_INFO = 0;
+const MUX_FRAME = 1;
+
+/**
+ * One connection carrying every tile of the wall.
+ *
+ * A browser allows six connections per host on HTTP/1.1, so sixteen cameras
+ * opened separately leave ten of them queued forever. This reads a single
+ * response and hands each record to the player that owns that channel.
+ */
+export class MultiplexReader {
+  constructor(sharedLog) {
+    this.players = new Map();
+    this.log = sharedLog || [];
+    this.controller = new AbortController();
+    this.bytes = 0;
+  }
+
+  add(channel, player) {
+    this.players.set(channel, player);
+  }
+
+  stop() {
+    this.controller.abort();
+    this.players.forEach((player) => player.stop());
+    this.players.clear();
+  }
+
+  async start(url, token) {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: this.controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${await response.text()}`);
+    }
+
+    const reader = response.body.getReader();
+    let buffer = new Uint8Array(0);
+    const append = (chunk) => {
+      const merged = new Uint8Array(buffer.length + chunk.length);
+      merged.set(buffer);
+      merged.set(chunk, buffer.length);
+      buffer = merged;
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        this.bytes += value.length;
+        append(value);
+
+        while (buffer.length >= MUX_HEADER_BYTES) {
+          const view = new DataView(buffer.buffer, buffer.byteOffset);
+          const kind = view.getUint8(0);
+          const channel = view.getUint16(1, true);
+          const flags = view.getUint8(3);
+          const length = view.getUint32(4, true);
+          const stamp = view.getFloat64(8, true);
+          if (buffer.length < MUX_HEADER_BYTES + length) break;
+          const payload = buffer.subarray(MUX_HEADER_BYTES, MUX_HEADER_BYTES + length);
+          const player = this.players.get(channel);
+          if (player) {
+            if (kind === MUX_INFO) {
+              player.startFed(JSON.parse(new TextDecoder().decode(payload)));
+            } else if (kind === MUX_FRAME) {
+              // Copy: the buffer this points into is about to be advanced.
+              player.pushFrame(payload.slice(), flags & 1, stamp);
+            }
+          }
+          buffer = buffer.subarray(MUX_HEADER_BYTES + length);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") throw err;
+    }
   }
 }

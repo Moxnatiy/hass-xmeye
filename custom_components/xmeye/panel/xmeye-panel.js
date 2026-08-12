@@ -40,6 +40,12 @@ const LAYOUTS = [
 const WALL_RETRIES = 5;
 const WALL_RETRY_DELAY = 5000;
 
+//: From this many tiles the wall switches to one shared connection. A browser
+//: allows six per host on HTTP/1.1 and the rest of Home Assistant needs some of
+//: those, so sharing starts well before the limit. Below it separate streams
+//: are kept, because then one stalling camera does not slow the others.
+const MUX_FROM = 3;
+
 //: Stream choices offered per tile on the wall.
 const WALL_STREAMS = [
   ["sub", "Дод."],
@@ -463,6 +469,8 @@ class XmeyePanel extends HTMLElement {
     //: has been brought back after a failure.
     this._wall = new Map();
     this._wallRetries = new Map();
+    //: Set when the whole wall shares one connection.
+    this._wallReader = null;
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -1290,9 +1298,54 @@ class XmeyePanel extends HTMLElement {
     const { nativePlayerSupported: supported } = await nativeModule;
     if (!supported()) return;
 
-    for (const canvas of this.shadowRoot.querySelectorAll("canvas[data-wall]")) {
+    const canvases = [...this.shadowRoot.querySelectorAll("canvas[data-wall]")];
+    if (!canvases.length) return;
+
+    // Above the browser's per-host connection limit, one stream per tile means
+    // the ones past the sixth never start. Sharing a single response costs one
+    // connection for the whole wall.
+    const perTile = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) === "main");
+    if (canvases.length >= MUX_FROM && perTile.length === 0) {
+      await this._startWallMultiplexed(canvases);
+      return;
+    }
+    for (const canvas of canvases) {
       await this._startWallTile(canvas);
     }
+  }
+
+  /**
+   * Every tile from one connection.
+   *
+   * The reader owns the fetch and hands each record to the player that owns
+   * that channel; the players do the same decoding and drawing as ever.
+   */
+  async _startWallMultiplexed(canvases) {
+    const { NativePlayer: Player, MultiplexReader } = await nativeModule;
+    const reader = new MultiplexReader(this._diagLog);
+    this._wallReader = reader;
+
+    const channels = [];
+    for (const canvas of canvases) {
+      const index = Number(canvas.dataset.wall);
+      const player = new Player(
+        canvas,
+        (stats) => this._updateWallCell(index, stats),
+        () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
+        this._diagLog
+      );
+      this._wall.set(index, player);
+      reader.add(index, player);
+      channels.push(index);
+    }
+
+    const params = new URLSearchParams({ channels: channels.join(","), stream: "sub" });
+    reader
+      .start(`/api/xmeye/native/${this._entryId}?${params}`, await this._token())
+      .catch((err) => {
+        if (this._wallReader !== reader) return;
+        channels.forEach((index) => this._failWallTile(index, err));
+      });
   }
 
   /** Bring up one tile on the stream chosen for its channel. */
@@ -1354,6 +1407,10 @@ class XmeyePanel extends HTMLElement {
   }
 
   _stopWall() {
+    if (this._wallReader) {
+      this._wallReader.stop();
+      this._wallReader = null;
+    }
     this._wall.forEach((player) => player.stop());
     this._wall.clear();
     this._wallRetries.clear();

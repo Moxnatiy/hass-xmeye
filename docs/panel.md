@@ -74,6 +74,19 @@ several 4K tiles at once overload both the browser and the recorder, which has
 about ten connections to give in total. Changing one camera's stream restarts
 that tile alone rather than the whole wall.
 
+From three tiles the wall stops opening a stream per camera and shares a single
+response instead. A browser allows six connections per host on HTTP/1.1 — the
+number is a constant in Chromium's socket pool — and the rest of Home Assistant
+needs some of those, so a wall of sixteen cameras opened separately leaves most
+of them queued forever, retrying and never starting. One response carries every
+tile, with the channel named in each record, and the players decode exactly as
+before.
+
+The trade is a shared pipe: if the browser falls behind, every tile slows
+together rather than one at a time. For a wall that is the better failure. A
+tile switched to the main stream falls back to its own connection, since the
+shared stream carries one stream type for all of them.
+
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 A wall is meant to be left open, so a tile that stops is brought back rather
