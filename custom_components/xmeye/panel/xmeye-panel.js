@@ -1733,14 +1733,39 @@ class XmeyePanel extends HTMLElement {
     // Above the browser's per-host connection limit, one stream per tile means
     // the ones past the sixth never start. Sharing a single response costs one
     // connection for the whole wall.
-    const perTile = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) === "main");
-    if (canvases.length >= MUX_FROM && perTile.length === 0) {
-      await this._startWallMultiplexed(canvases);
-      return;
+    //
+    // The shared response carries one stream type for all of it, so a tile
+    // switched to the main stream cannot travel in it and takes its own
+    // connection. Only that tile, though: the rest still share. Making the whole
+    // wall fall back because one camera wants full resolution put sixteen
+    // cameras back on sixteen connections to satisfy one.
+    const own = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) === "main");
+    const shared = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) !== "main");
+
+    if (shared.length >= MUX_FROM) {
+      await this._startWallMultiplexed(shared);
+    } else {
+      for (const canvas of shared) await this._startWallTile(canvas);
     }
-    for (const canvas of canvases) {
-      await this._startWallTile(canvas);
-    }
+    for (const canvas of own) await this._startWallTile(canvas);
+  }
+
+  /** A wall player for one channel, wired to that tile's cell and log. */
+  async _makeWallPlayer(index, canvas) {
+    const { NativePlayer: Player } = await nativeModule;
+    const player = new Player(
+      canvas,
+      (stats) => this._updateWallCell(index, stats),
+      () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
+      this._channelLog(index)
+    );
+    this._wall.set(index, player);
+    return player;
+  }
+
+  /** Whether the shared connection is the one carrying this channel. */
+  _isShared(index) {
+    return Boolean(this._wallReader && this._wallReader.players.has(index));
   }
 
   /**
@@ -1750,7 +1775,7 @@ class XmeyePanel extends HTMLElement {
    * that channel; the players do the same decoding and drawing as ever.
    */
   async _startWallMultiplexed(wanted) {
-    const { NativePlayer: Player, MultiplexReader } = await nativeModule;
+    const { MultiplexReader } = await nativeModule;
     const reader = new MultiplexReader(this._playerLog, (channel, said) => {
       if (this._wallReader !== reader) return;
       const what = WALL_TROUBLE[said.reason] || said.reason;
@@ -1768,14 +1793,7 @@ class XmeyePanel extends HTMLElement {
     for (const stale of wanted) {
       const index = Number(stale.dataset.wall);
       const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`) || stale;
-      const player = new Player(
-        canvas,
-        (stats) => this._updateWallCell(index, stats),
-        () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-        this._channelLog(index)
-      );
-      this._wall.set(index, player);
-      reader.add(index, player);
+      reader.add(index, await this._makeWallPlayer(index, canvas));
       channels.push(index);
     }
 
@@ -1791,15 +1809,8 @@ class XmeyePanel extends HTMLElement {
 
   /** Bring up one tile on the stream chosen for its channel. */
   async _startWallTile(canvas) {
-    const { NativePlayer: Player } = await nativeModule;
     const index = Number(canvas.dataset.wall);
-    const player = new Player(
-      canvas,
-      (stats) => this._updateWallCell(index, stats),
-      () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-      this._playerLog
-    );
-    this._wall.set(index, player);
+    const player = await this._makeWallPlayer(index, canvas);
     player
       .start(
         `/api/xmeye/native/${this._entryId}/${index}?stream=${this._wallStream(index)}`,
@@ -1835,17 +1846,31 @@ class XmeyePanel extends HTMLElement {
   }
 
   async _restartWallTile(index) {
+    const wasShared = this._isShared(index);
     const running = this._wall.get(index);
     if (running) {
-      // Stop before anything is awaited, so the old connection is gone before
-      // the new one asks the recorder for the same channel.
-      running.stop();
+      // Leave the way it arrived, and before anything is awaited: the old
+      // connection must be gone before the new one asks for the same channel.
+      if (wasShared) this._wallReader.remove(index);
+      else running.stop();
       this._wall.delete(index);
     }
     const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-    if (!canvas) return;
+    if (!canvas) {
+      if (wasShared) await this._sendWallChannels();
+      return;
+    }
     this._updateWallCell(index, { connecting: true });
+
+    // Switching a tile to the main stream takes it out of the shared response,
+    // and switching it back puts it in. Either way only this channel moves.
+    if (this._wallReader && this._wallStream(index) !== "main") {
+      this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
+      await this._sendWallChannels();
+      return;
+    }
     await this._startWallTile(canvas);
+    if (wasShared) await this._sendWallChannels();
   }
 
   /**
@@ -1914,48 +1939,58 @@ class XmeyePanel extends HTMLElement {
     if (!gone.length && !fresh.length) return;
     this._noteDiag("стіна", `узгодження: додано ${fresh}, знято ${gone}`);
 
-    if (this._wallReader) {
-      const { NativePlayer: Player } = await nativeModule;
-      gone.forEach((index) => {
+    // A channel leaves the way it arrived: out of the shared response, or by
+    // closing its own connection.
+    let sharedChanged = false;
+    for (const index of gone) {
+      if (this._isShared(index)) {
         this._wallReader.remove(index);
-        this._wall.delete(index);
-        this._wallRetries.delete(index);
-      });
-      for (const index of fresh) {
-        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-        if (!canvas) continue;
-        const player = new Player(
-          canvas,
-          (stats) => this._updateWallCell(index, stats),
-          () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
-          this._playerLog
-        );
-        this._wall.set(index, player);
-        this._wallReader.add(index, player);
+        sharedChanged = true;
+      } else {
+        const player = this._wall.get(index);
+        if (player) player.stop();
       }
-      await this._sendWallChannels();
-      return;
-    }
-
-    gone.forEach((index) => {
-      const player = this._wall.get(index);
-      if (player) player.stop();
       this._wall.delete(index);
       this._wallRetries.delete(index);
-    });
-    // Growing past the point where separate connections stop fitting is the one
-    // case that has to start over, because the whole wall changes transport. The
-    // players are cleared first: _startWall reconciles a wall that still has
-    // any, and reconciling is what led here.
-    if (this._wall.size + fresh.length >= MUX_FROM) {
+    }
+
+    // The shared response carries the sub stream only, so a tile on the main
+    // stream always gets its own connection whatever the rest of the wall does.
+    const freshShared = fresh.filter((index) => this._wallStream(index) !== "main");
+    const freshOwn = fresh.filter((index) => this._wallStream(index) === "main");
+
+    if (this._wallReader) {
+      for (const index of freshShared) {
+        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+        if (!canvas) continue;
+        this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
+        sharedChanged = true;
+      }
+    } else if (freshShared.length && this._sharedCount() + freshShared.length >= MUX_FROM) {
+      // Growing past the point where separate connections stop fitting is the
+      // one case that has to start over, because the tiles change transport. The
+      // players are cleared first: _startWall reconciles a wall that still has
+      // any, and reconciling is what led here.
       this._stopWall();
       await this._startWall();
       return;
+    } else {
+      for (const index of freshShared) {
+        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+        if (canvas) await this._startWallTile(canvas);
+      }
     }
-    for (const index of fresh) {
+
+    for (const index of freshOwn) {
       const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
       if (canvas) await this._startWallTile(canvas);
     }
+    if (sharedChanged) await this._sendWallChannels();
+  }
+
+  /** How many running tiles are on the sub stream, and so could share. */
+  _sharedCount() {
+    return [...this._wall.keys()].filter((index) => this._wallStream(index) !== "main").length;
   }
 
   /**
@@ -1971,7 +2006,17 @@ class XmeyePanel extends HTMLElement {
     await reader.ready;
     if (!reader.session || this._wallReader !== reader) return;
 
-    const channels = [...this._wall.keys()];
+    // Only what this response carries — not the whole wall, which may also hold
+    // tiles on their own connections.
+    const channels = [...reader.players.keys()];
+    if (!channels.length) {
+      // Nothing left to carry. An empty channel set is not a thing the endpoint
+      // accepts, and an idle response would hold a connection for nothing.
+      this._noteDiag("стіна", "спільне з'єднання більше не потрібне");
+      reader.stop();
+      this._wallReader = null;
+      return;
+    }
     const response = await fetch(`/api/xmeye/native/${this._entryId}/mux`, {
       method: "POST",
       headers: {

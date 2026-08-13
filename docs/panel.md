@@ -83,9 +83,12 @@ tile, with the channel named in each record, and the players decode exactly as
 before.
 
 The trade is a shared pipe: if the browser falls behind, every tile slows
-together rather than one at a time. For a wall that is the better failure. A
-tile switched to the main stream falls back to its own connection, since the
-shared stream carries one stream type for all of them.
+together rather than one at a time. For a wall that is the better failure.
+
+The shared response carries one stream type, so a tile switched to the main
+stream travels on its own connection — that tile only. The rest keep sharing,
+and switching a tile either way moves just that channel: into the shared
+response, or out of it onto a connection of its own.
 
 Editing the wall does not disturb the cameras on it. Switching a channel off,
 dragging a tile, turning the page or changing the layout used to stop every
