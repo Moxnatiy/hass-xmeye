@@ -40,11 +40,17 @@ const LAYOUTS = [
 const WALL_RETRIES = 5;
 const WALL_RETRY_DELAY = 5000;
 
-//: From this many tiles the wall switches to one shared connection. A browser
-//: allows six per host on HTTP/1.1 and the rest of Home Assistant needs some of
-//: those, so sharing starts well before the limit. Below it separate streams
-//: are kept, because then one stalling camera does not slow the others.
-const MUX_FROM = 3;
+//: From this many sharable tiles the wall uses one connection. A browser allows
+//: six per host on HTTP/1.1 and the rest of Home Assistant needs some of those,
+//: so sharing starts as soon as there is anything to share.
+//:
+//: It was three while a separate connection per tile was the better failure —
+//: one stalling camera then slowed only itself. That is no longer the trade:
+//: the shared path gives every channel a deadline, four redials and a reason
+//: printed under the tile, and a channel that goes quiet on its own connection
+//: gets none of that. Only a single tile is left on its own now, since there is
+//: nothing for it to share with.
+const MUX_FROM = 2;
 
 //: Why a shared-connection channel is showing nothing. The server sends the
 //: reason as a word; the sentence belongs here, where the language does.

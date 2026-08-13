@@ -74,7 +74,7 @@ several 4K tiles at once overload both the browser and the recorder, which has
 about ten connections to give in total. Changing one camera's stream restarts
 that tile alone rather than the whole wall.
 
-From three tiles the wall stops opening a stream per camera and shares a single
+From two tiles the wall stops opening a stream per camera and shares a single
 response instead. A browser allows six connections per host on HTTP/1.1 — the
 number is a constant in Chromium's socket pool — and the rest of Home Assistant
 needs some of those, so a wall of sixteen cameras opened separately leaves most
