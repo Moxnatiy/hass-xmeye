@@ -111,6 +111,13 @@ within a second is also remembered, and tried last on the following load rather
 than costing the same seconds again; a configuration that later runs for a
 quarter of a minute is forgiven.
 
+The ⛶ button gives the wall the whole screen with nothing else on it. What goes
+fullscreen is the element already on the page, not a copy drawn somewhere else,
+so the canvases never move and every camera plays straight through the switch and
+back; the channel picker is hidden by CSS rather than removed, for the same
+reason. The grid keeps its aspect ratio and is centred — stretching 4:3 cameras
+onto a 16:9 screen is worse than a black margin. Esc returns.
+
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 A wall is meant to be left open, so a tile that stops is brought back rather

@@ -1075,6 +1075,9 @@ class XmeyePanel extends HTMLElement {
       })
     );
 
+    const full = root.getElementById("wallfull");
+    if (full) full.addEventListener("click", () => this._toggleWallFullscreen());
+
     const prev = root.getElementById("wallprev");
     if (prev)
       prev.addEventListener("click", () => {
@@ -1483,7 +1486,36 @@ class XmeyePanel extends HTMLElement {
             : ""
         }
         <div class="hint">${channels.length} з ${this._detail.device.channels} каналів на стіні</div>
+        <button class="ghost wall-full" id="wallfull"
+                title="На весь екран (вихід — Esc)">⛶</button>
       </div>`;
+  }
+
+  /**
+   * The wall alone, filling the screen.
+   *
+   * Fullscreen is asked of the element that is already on the page rather than
+   * drawn again somewhere else: the canvases stay exactly where they are, so
+   * every camera keeps playing through the switch and back. The picker is hidden
+   * by CSS for the same reason — removing it from the DOM would move the tiles.
+   */
+  _toggleWallFullscreen() {
+    const layout = this.shadowRoot.querySelector(".wall-layout");
+    if (!layout) return;
+    const open = document.fullscreenElement || document.webkitFullscreenElement;
+    if (open) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      return;
+    }
+    const request = layout.requestFullscreen || layout.webkitRequestFullscreen;
+    if (!request) {
+      this._noteDiag("стіна", "браузер не дає повний екран");
+      return;
+    }
+    // Safari resolves this rejection rather than throwing, so both are caught.
+    Promise.resolve(request.call(layout)).catch((err) =>
+      this._noteDiag("стіна", `повний екран відхилено: ${err.message || err}`)
+    );
   }
 
   /**
@@ -3461,6 +3493,24 @@ const STYLES = `
   .wall-layout { display:flex; align-items:flex-start; gap:12px; }
   .wall-layout .wall { flex:1; min-width:0; }
   .wall-bar { justify-content:flex-start; }
+  /* Pushed to the far end of the toolbar, away from the layout buttons. */
+  .wall-full { margin-left:auto; font-size:16px; line-height:1; padding:6px 10px; }
+
+  /* Fullscreen: the wall and nothing else. The element already on the page is
+     the one made fullscreen, so the canvases never move and the cameras play
+     straight through it; the picker is hidden rather than removed for the same
+     reason. The grid keeps its aspect ratio and is centred, because stretching
+     4:3 cameras to a 16:9 screen is worse than a black margin. */
+  .wall-layout:fullscreen { background:#000; gap:0; align-items:center;
+    justify-content:center; }
+  .wall-layout:fullscreen .picker { display:none; }
+  .wall-layout:fullscreen .wall { flex:none; height:100vh; width:auto;
+    max-width:100vw; max-height:100vh; border:none; }
+  .wall-layout:-webkit-full-screen { background:#000; gap:0; align-items:center;
+    justify-content:center; }
+  .wall-layout:-webkit-full-screen .picker { display:none; }
+  .wall-layout:-webkit-full-screen .wall { flex:none; height:100vh; width:auto;
+    max-width:100vw; max-height:100vh; border:none; }
 
   /* Channel picker: which cameras go on the wall and in what order. */
   .picker { width:226px; flex:none; background: var(--card-background-color);
