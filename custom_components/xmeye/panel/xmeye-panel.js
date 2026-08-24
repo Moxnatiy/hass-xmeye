@@ -35,6 +35,65 @@ const LAYOUTS = [
   { id: 16, label: "4×4", columns: 4, rows: 4 },
 ];
 
+//: The side of a layout icon, in pixels. Matched to the fullscreen glyph beside
+//: it so the toolbar reads as one row of buttons rather than two sizes.
+const ICON = 16;
+
+/**
+ * A layout drawn as the grid it produces.
+ *
+ * "6" and "3×3" say the same thing twice and neither says which of them puts a
+ * big tile in the corner. The picture does, and it is built from the same
+ * numbers the wall is laid out from, so the two cannot drift apart.
+ */
+const layoutIcon = ({ columns, rows, hero = 0 }) => {
+  const gap = 1.2;
+  const width = (ICON - gap * (columns - 1)) / columns;
+  const height = (ICON - gap * (rows - 1)) / rows;
+  const cell = (column, row, span = 1) =>
+    `<rect x="${((width + gap) * column).toFixed(2)}"` +
+    ` y="${((height + gap) * row).toFixed(2)}"` +
+    ` width="${(width * span + gap * (span - 1)).toFixed(2)}"` +
+    ` height="${(height * span + gap * (span - 1)).toFixed(2)}" rx="0.7"/>`;
+
+  const cells = hero ? [cell(0, 0, hero)] : [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      // The hero covers the top-left block; everything else fills the rest.
+      if (hero && column < hero && row < hero) continue;
+      cells.push(cell(column, row));
+    }
+  }
+  return (
+    `<svg viewBox="0 0 ${ICON} ${ICON}" width="${ICON}" height="${ICON}"` +
+    ` fill="currentColor" aria-hidden="true">${cells.join("")}</svg>`
+  );
+};
+
+/**
+ * The fullscreen mark, drawn rather than typed.
+ *
+ * A glyph would be sized by font metrics, and the layout marks beside it are
+ * sized in pixels; matching the two then depends on which CSS rule wins, which
+ * is how they ended up 16 and 12. Both are SVG at the same box instead.
+ */
+const fullscreenIcon = () =>
+  `<svg viewBox="0 0 ${ICON} ${ICON}" width="${ICON}" height="${ICON}" fill="none"` +
+  ` stroke="currentColor" stroke-width="1.6" stroke-linecap="round"` +
+  ` stroke-linejoin="round" aria-hidden="true">` +
+  `<path d="M6 1.6H1.6V6"/><path d="M10 1.6h4.4V6"/>` +
+  `<path d="M6 14.4H1.6V10"/><path d="M10 14.4h4.4V10"/></svg>`;
+
+//: "1 канал", "4 канали", "6 каналів" — the toolbar says it in a tooltip, and
+//: getting it wrong is the kind of thing a viewer notices every single time.
+const channelWord = (count) => {
+  const tail = count % 10;
+  const teen = count % 100 >= 11 && count % 100 <= 14;
+  if (!teen && tail === 1) return "канал";
+  if (!teen && tail >= 2 && tail <= 4) return "канали";
+  return "каналів";
+};
+
 //: How hard to try to bring a wall tile back before leaving the error on
 //: screen, and the base delay between attempts.
 const WALL_RETRIES = 5;
@@ -1489,7 +1548,8 @@ class XmeyePanel extends HTMLElement {
           ${LAYOUTS.map(
             (l) =>
               `<button class="ghost layout ${l.id === this._layout ? "active" : ""}"
-                       data-layout="${l.id}" title="${l.id} каналів">${l.label}</button>`
+                       data-layout="${l.id}"
+                       title="${l.id} ${channelWord(l.id)}">${layoutIcon(l)}</button>`
           ).join("")}
         </div>
         ${
@@ -1503,7 +1563,7 @@ class XmeyePanel extends HTMLElement {
         }
         <div class="hint">${channels.length} з ${this._detail.device.channels} каналів на стіні</div>
         <button class="ghost wall-full" id="wallfull"
-                title="На весь екран (вихід — Esc)">⛶</button>
+                title="На весь екран (вихід — Esc)">${fullscreenIcon()}</button>
       </div>`;
   }
 
@@ -3460,7 +3520,9 @@ const STYLES = `
   .wall-layout .wall { flex:1; min-width:0; }
   .wall-bar { justify-content:flex-start; }
   /* Pushed to the far end of the toolbar, away from the layout buttons. */
-  .wall-full { margin-left:auto; font-size:16px; line-height:1; padding:6px 10px; }
+  button.wall-full { margin-left:auto; display:flex; align-items:center;
+    line-height:1; }
+  .wall-full svg { display:block; }
 
   /* Fullscreen: the wall and nothing else. The element already on the page is
      the one made fullscreen, so the canvases never move and the cameras play
@@ -3540,6 +3602,11 @@ const STYLES = `
     .pick-list { max-height:none; }
   }
   .layouts { display:flex; gap:4px; }
+  /* Same box as the fullscreen button beside them: a 16px mark inside the
+     padding every ghost button has, so the toolbar is one row of one height. */
+  button.layout { display:flex; align-items:center; line-height:1; }
+  .layout svg { display:block; }
+  /* The grid is drawn in the text colour, so the active state inverts with it. */
   .layout.active { background: var(--primary-color); color: var(--text-primary-color,#fff);
     border-color: var(--primary-color); }
   .pager { display:flex; align-items:center; gap:8px; font-size:13px;
