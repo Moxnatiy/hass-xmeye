@@ -346,8 +346,14 @@ the app's own traffic, frame timestamps against packet capture times:
  19.4..27.5s   00:00:16 -> 00:00:58    5.20x
 ```
 
-and the jump follows a `msgid 1420` sent on the control socket. What that
-message says is still unknown: the app's long-lived control connection encrypts
+and the jump follows a `msgid 1420` sent on the control socket. **That reading
+was wrong, and the disassembly below says why**: the app's speed control never
+reaches a socket at all, and a download session bursts anyway — 5.2x over an
+eight-second window is inside the noise a control run produces on its own, which
+is the trap this very section warns about. The 1420 was a session message that
+happened to sit near the window boundary.
+
+What that message says is still unknown: the app's long-lived control connection encrypts
 its payloads (base64 over AES-128-ECB — identical plaintext prefixes produce
 identical ciphertext blocks), while every connection it opens afterwards stays
 plaintext. The key is negotiated at login (`CommunicateKey` sits beside
@@ -388,6 +394,37 @@ control command, which is still unread.
 
 `tools/probe_playback_value.py` maps the field.
 
+#### …but only in ByTime, which is the mode playback cannot use
+
+The table above was measured with `PlayMode: "ByTime"`, because that is what the
+probe sends. Playback proper has to use `ByName` — see the next section, ByTime
+ignores the channel — and **there `Value=2` does nothing at all**. Measured on
+the same device within the same hour, walking real recordings by name:
+
+| Mode | Value | fps-of-recording |
+|---|---|---|
+| ByName | 0 | 20.0 |
+| ByName | **2** | **19.9** |
+| ByTime | 0 | 20.6 |
+| ByTime | **2** | **4.0** |
+
+So the fast-scan was never reachable from the panel, which played by name and
+set `Value=2` above ×4 in the belief that it was thinning the stream. It was
+not: the browser received the full stream and was told to treat it as already
+thinned, which switched off the only thinning that was actually happening.
+
+It is not dependable even in its own mode. Repeating the ByTime measurement
+across different windows gave 2.9, 4.7, 8.2 and 18.5 frames per second of
+recording — the last being no decimation whatever — with no pattern found in the
+window that would predict which. A mode that answers differently to the same
+question is not one to build a speed control on.
+
+What the device does give, dependably, is **bandwidth**: an archive played by
+name arrives at about seven times real time (192 s of recording in 27.7 s of
+wall clock, 6.5 Mbit/s, channel 0's 4K H.265). That is the honest ceiling, and
+it is enough for ×1 to ×8 with the client doing the pacing — which, per the SDK
+note below, is exactly what the vendor app does.
+
 ### Cross-checked against the vendor SDK
 
 The Xiongmai FunSDK demos (`github.com/xmeye-team`) ship the SDK headers, which
@@ -407,9 +444,51 @@ confirm the model:
   coarse mode selector here, not the SDK's speed index.
 
 The practical conclusion: the encrypted control channel hides nothing we need.
-The vendor app sends the same plaintext OPPlayBack commands; adjustable speed is
-client-side pacing, and the one server-side fast mode is the plaintext
-`Value=2`. Both are already in the integration.
+The vendor app sends the same plaintext OPPlayBack commands, and adjustable
+speed is client-side pacing.
+
+### Read out of the app: its ×N is a decoder clock and nothing else
+
+The header note above says the SDK's `setPlaySpeed` is decoder pacing. The
+disassembly of the shipped `FunSDK` binary settles it outright — there is no
+device command behind the app's speed control at all, encrypted or otherwise.
+
+`FUN_MediaSetPlaySpeed(hPlayer, Seq, Speed)` builds a message object, tags it
+`0x157c`, and hands it to `XBASIC::CMSGObject::PushMsg`. That is the SDK's own
+in-process message bus. No socket is touched, so the encrypted control
+connection was never carrying the speed change we went looking for.
+
+What the speed reaches is `CDecoder`, in two pieces:
+
+`CDecoder::OnSetSpeed` computes a frame interval — `1000000.0 / fps`
+microseconds, scaled by the speed factor — and stores it as the decoder's pace.
+Around it sits an adaptive trim that compares how much media is queued against
+four thresholds and nudges the interval by ×1.2, ×1.5, ×0.5 or ×0.25, so the app
+drifts its own playback slightly to hold its buffer at depth.
+
+`CDecoder::SpeedStartegy(FRAME_INFO*)` is the pacing itself, and reads almost
+line for line like the player here:
+
+```
+now   = clock_gettime(CLOCK_MONOTONIC_RAW) in ms
+media = (now - wall_anchor) * speed + media_anchor
+if media > frame.timestamp and media - frame.timestamp >= 1001:
+    release the frame undecoded, then walk the queue
+    forward to the next one flagged as a keyframe
+```
+
+A wall clock anchored to a media point, multiplied by the rate; a frame more
+than a second late is dropped; and catching up means stepping to the next
+keyframe, because a delta frame cannot be dropped alone. The panel does the same
+with a 300 ms threshold instead of 1001 ms, and leans on TCP backpressure where
+the app leans on its buffer-depth trim.
+
+Offsets, in the arm64 `FunSDK` inside XMEye Pro on macOS: `SpeedStartegy`
+@ 0xa6724, `OnSetSpeed` @ 0xa8ba8, `FUN_MediaSetPlaySpeed` @ 0xfd310.
+
+So the answer to "why is it smooth in the app" was never a protocol secret. The
+device gives the same full stream to both, at about seven times real time, and
+the app simply paced it correctly.
 
 ### Playback by time ignores the channel
 

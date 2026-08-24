@@ -175,3 +175,32 @@ def test_wall_restart_clears_the_players_first() -> None:
         f"restart without clearing the wall first: {unguarded}. Call "
         "this._stopWall() immediately before, or _startWall comes straight back."
     )
+
+
+def test_paced_playback_never_empties_its_own_read_ahead() -> None:
+    """The archive's queue must not be shed the way the live one is.
+
+    Live viewing shows frames as they arrive, so a full queue means the browser
+    is hopelessly behind and the only sane move is to drop everything and wait
+    for a keyframe. The archive holds the identical queue back on purpose — it
+    is a read-ahead buffer, filled at seven times real time and drained by a
+    clock, so full is its normal state. Applying the live rule there discarded a
+    group of pictures every few seconds and left the decoder waiting for a
+    keyframe with nothing on screen. The two cases are one function apart, which
+    is exactly how they came to share a rule they should not.
+    """
+    source = (PANEL_DIR / "native-player.js").read_text(encoding="utf-8")
+    body = re.search(r"\n  _enqueue\([^)]*\) \{(.*?)\n  \}\n", source, re.S)
+    assert body, "_enqueue is gone from the player; this test needs updating"
+
+    clearing = [
+        line
+        for line in body.group(1).splitlines()
+        if "_backlog.length = 0" in line or "_backlog.length=0" in line
+    ]
+    if clearing:
+        guard = re.search(r"if \(!this\.rate && this\._backlog\.length >= BACKLOG\)", body.group(1))
+        assert guard, (
+            "_enqueue empties the backlog without checking this.rate first, so "
+            "archive playback sheds the read-ahead it is deliberately holding."
+        )

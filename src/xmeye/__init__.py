@@ -25,6 +25,7 @@ from .exceptions import (
 from .frames import (
     FrameDemuxer,
     FrameType,
+    MediaClock,
     MediaFrame,
     StreamInfo,
     decode_timestamp,
@@ -53,6 +54,7 @@ __all__ = [
     "demux",
     "decode_timestamp",
     "StreamInfo",
+    "MediaClock",
     "MediaFrame",
     "LiveStream",
     "FrameType",

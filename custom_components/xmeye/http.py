@@ -43,7 +43,7 @@ from homeassistant.core import HomeAssistant
 
 from . import debuglog
 from .const import DOMAIN, STREAM_MAIN
-from .xmeyelib import ArchiveStream, LiveStream, StreamType, XmeyeError
+from .xmeyelib import ArchiveStream, LiveStream, MediaClock, StreamType, XmeyeError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,11 +110,6 @@ class XmeyePlaybackView(HomeAssistantView):
         begin = begin.replace(tzinfo=None)
         end = end.replace(tzinfo=None)
         stream_index = 0 if request.query.get("stream", "main") == "main" else 1
-        # ?fast=1 asks the recorder itself for a decimated fast-scan (Value=2):
-        # the same frames spread across ~10x more recording time. It is the only
-        # server-side fast-forward the protocol offers, and it stays fully
-        # decodable, so the browser can pace it to any rate.
-        value = 2 if request.query.get("fast") == "1" else 0
 
         # Playback has to go by file name, not by time. Asking the recorder for a
         # time range ignores the channel entirely — every ByTime request comes
@@ -152,6 +147,9 @@ class XmeyePlaybackView(HomeAssistantView):
         sent_header = False
         frames = skipped = 0
         archive: ArchiveStream | None = None
+        # One clock for the whole run, so crossing into the next recording is
+        # just another keyframe the timeline follows.
+        clock = MediaClock()
         try:
             # One recording is one session, so playing across a stretch of the
             # day means walking the files in order.
@@ -164,7 +162,6 @@ class XmeyePlaybackView(HomeAssistantView):
                     channel=channel_index,
                 )
                 archive.stream_index = stream_index
-                archive.value = value
                 await archive.start()
                 async for frame in archive.frames(record, timeout=25):
                     if not frame.is_video or not frame.has_valid_nal:
@@ -188,7 +185,7 @@ class XmeyePlaybackView(HomeAssistantView):
                         await response.write(len(header).to_bytes(4, "little") + header)
                         sent_header = True
 
-                    stamp = (frame.timestamp or record.begin).timestamp() * 1000
+                    stamp = clock.stamp(frame, record.begin) * 1000
                     await response.write(
                         _FRAME_HEADER.pack(
                             1 if frame.keyframe else 0, len(frame.payload), stamp

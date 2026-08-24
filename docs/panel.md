@@ -196,17 +196,51 @@ smaller stream and then to snapshots rather than showing a black screen.
 ## The archive player
 
 Click the timeline to play from that moment. The cursor follows the frame
-currently on screen. There is pause, ±10 s stepping, and speeds from ×1 to ×16.
+currently on screen. There is pause, ±10 s stepping, and speeds from ×1 to ×8.
 
-Speed uses one mechanism at every rate: a frame stream paced by the player's own
-clock. Up to ×2 the recorder sends the full stream. At ×4 and above the player
-adds `fast=1`, which asks the recorder to thin the stream itself (OPPlayBack
-`Value=2`) — the only server-side fast-forward the protocol offers, measured at
-roughly sixty times coverage. Those thinned frames are still real and decodable,
-so the same clock paces them to the exact requested rate; the player keeps all
-of them rather than dropping to keyframes, since the recorder already did the
-thinning. The actual speed reached is shown next to the requested one, because
-the recorder's own limits still apply.
+### Time, which the recorder mostly does not send
+
+The recorder stamps keyframes only, and only to the second. Twenty-four frames
+in every twenty-five arrive with no time at all, and giving those the
+recording's start time — the obvious fallback — describes a timeline that runs
+backwards on every frame. A player pacing itself by that lets a whole group of
+pictures fall due at once and then nothing until the next keyframe: data keeps
+arriving and the picture moves once a second, which is what it did.
+
+So the timeline is built rather than read. It advances one frame period per
+frame, at the frame rate the recorder measures per keyframe, and follows a
+keyframe only when its stamp is later than the clock — truncation can only make
+a stamp early, so an early one is the rounding and a late one means the clock
+has fallen behind. Across three consecutive recordings that gives 171.3 s of
+timeline for 171 s of recording with no step backwards anywhere, and crossing
+into the next recording is just another keyframe the clock follows.
+
+### Speed
+
+One mechanism at every rate: the whole stream, paced by the player's own clock.
+The recorder hands an archive over at about seven times real time — 192 s of
+recording in 27.7 s, measured on the device — and that bandwidth, not any device
+command, is what the speeds are built on. Nothing is re-requested when the speed
+changes, so the picture does not blink.
+
+Which frames survive is decided by measurement rather than by rate. While the
+player keeps up it shows every frame; once it falls more than 300 ms behind its
+own clock it steps to the next group of pictures, because a delta frame cannot
+be dropped on its own without breaking the decoder's chain. That tunes itself to
+the stream and the machine, where a fixed threshold cannot: a 4K main stream at
+×4 is eighty frames a second to decode, a 720p sub stream at ×8 a quarter of
+that. Measured on channel 0's 4K H.265: ×1, ×2 and ×4 reached exactly, every
+frame decoded, and ×8 reached by stepping groups.
+
+The speed actually reached is shown next to the one asked for, because the link
+decides it in the end.
+
+The recorder's own fast-scan is deliberately not used. `OPPlayBack Value=2` does
+thin the stream, but only in `ByTime` mode — and playback has to go by name,
+since `ByTime` ignores the channel. Played by name it is indistinguishable from
+`Value=0`, so the panel spent every speed above ×4 telling the browser a full
+stream was already thinned, which switched off the thinning that would have
+worked. See [the protocol notes](protocol.md).
 
 ## OSD and diagnostics
 

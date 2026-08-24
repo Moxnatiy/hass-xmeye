@@ -25,12 +25,24 @@ const IN_FLIGHT = 3;
 //: than this and latency becomes noticeable, so skipping a group is better.
 const BACKLOG = 90;
 
-//: How many frames to keep ready during archive playback.
-const READ_AHEAD = 45;
+//: How many frames to keep ready during archive playback. Reading stops above
+//: this and resumes below it, which is what holds the recorder back: the
+//: response body's own backpressure is the pacing mechanism.
+//:
+//: Generous on purpose. One read returns a whole burst, so the count overshoots
+//: the moment it dips under, and at ×8 the queue drains eight times faster than
+//: at ×1 — being caught empty means a stalled picture, while being full costs
+//: under a megabyte.
+const READ_AHEAD = 120;
 
-//: The speed above which only keyframes are shown. Beyond it decoding every
-//: frame is pointless: the screen cannot change fast enough anyway.
-const KEYFRAME_ONLY_RATE = 4;
+//: How far behind its own clock archive playback may fall before it starts
+//: skipping, in milliseconds. Which speeds need this is not something to decide
+//: in advance: a 4K main stream at ×4 is 80 frames a second to decode and a
+//: 720p sub stream at ×8 is a quarter of that, and the machine watching differs
+//: too. So the player measures instead — below this it plays every frame, above
+//: it drops to the next group of pictures, and the speed asked for is reached
+//: either way.
+const LATE = 300;
 
 //: The window over which rates are averaged. Data arrives in bursts, one per
 //: group of pictures, so a one-second window would swing the figure from zero
@@ -267,10 +279,6 @@ export class NativePlayer {
     const settings = options || {};
     //: 0 means live viewing; anything else is the archive playback speed.
     this.rate = settings.rate || 0;
-    //: True when the source is a server-side fast-scan, already thinned to a
-    //: fraction of the frames. Every one of those frames counts, so the
-    //: keyframe-only shortcut used for full streams at high speed must not fire.
-    this.decimated = Boolean(settings.decimated);
     this.paused = false;
     //: Time of the frame currently on screen; the panel tracks its cursor by it.
     this.position = null;
@@ -741,8 +749,16 @@ export class NativePlayer {
    * pictures as one burst, and the decoder would receive all of it at once.
    */
   _enqueue(payload, keyframe, stamp) {
-    if (this._backlog.length >= BACKLOG) {
-      // We are hopelessly behind; only a fresh group of pictures makes sense.
+    // Live viewing shows frames as they arrive, so a full queue means we are
+    // hopelessly behind and only a fresh group of pictures makes sense.
+    //
+    // Archive playback is the opposite case wearing the same clothes. There the
+    // queue is a read-ahead buffer, held back on purpose by a clock, and being
+    // full is exactly what it is for — the recorder hands the archive over at
+    // about seven times real time, so it fills faster than any speed drains it.
+    // Emptying it there threw away a group of pictures every few seconds and
+    // left the decoder waiting for the next keyframe with nothing on screen.
+    if (!this.rate && this._backlog.length >= BACKLOG) {
       this._backlog.length = 0;
       this._needKey = true;
       this.stats.dropped += 1;
@@ -783,15 +799,13 @@ export class NativePlayer {
           this._clockStart = now;
           this._mediaStart = item.stamp;
         }
-        // At high speed only keyframes are shown: the rest could not reach the
-        // screen anyway, and decoding them only loads the decoder. A fast-scan
-        // is already thinned at the source, so this would leave a slideshow.
-        if (!this.decimated && this.rate >= KEYFRAME_ONLY_RATE && !item.keyframe) {
-          this._backlog.shift();
-          continue;
-        }
         const due = this._clockStart + (item.stamp - this._mediaStart) / this.rate;
         if (now < due) break;
+        // Too far behind to catch up frame by frame — the decoder cannot hold
+        // this speed on this stream. Step to the next group of pictures rather
+        // than sink further: the picture then moves in steps, which is what a
+        // fast scan looks like anywhere, and the clock stays true.
+        if (now - due > LATE && !item.keyframe && this._skipGroup()) continue;
         if (!ready()) break;
         this._backlog.shift();
         this.position = item.stamp;
@@ -800,6 +814,24 @@ export class NativePlayer {
     } finally {
       this._feeding = false;
     }
+  }
+
+  /**
+   * Drop what is already too late to show, up to the next keyframe.
+   *
+   * A delta frame cannot be dropped on its own: the decoder would lose the
+   * chain and stop with an error. So catching up means discarding the rest of
+   * the group of pictures and resuming at the next keyframe. Answers false when
+   * no keyframe is in hand — there is then nothing to skip to, and playing the
+   * frames late is better than throwing away everything we have.
+   */
+  _skipGroup() {
+    const next = this._backlog.findIndex((item) => item.keyframe);
+    if (next <= 0) return false;
+    this.stats.skipped = (this.stats.skipped || 0) + next;
+    this._backlog.splice(0, next);
+    this._needKey = true;
+    return true;
   }
 
   /** Pause playback, leaving the stream open. */

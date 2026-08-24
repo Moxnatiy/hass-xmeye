@@ -6,13 +6,14 @@ The headers come from real NBD8008R-U frames: a 4K H.265 keyframe and its deltas
 from __future__ import annotations
 
 import struct
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from xmeye.frames import (
     FrameDemuxer,
     FrameType,
+    MediaClock,
     decode_timestamp,
     demux,
     encode_timestamp,
@@ -323,3 +324,74 @@ def test_hevc_service_block_is_still_rejected_after_a_keyframe() -> None:
     list(demuxer.feed(iframe(VIDEO_PAYLOAD)))
     blocks = list(demuxer.feed(pframe(SERVICE_BLOCK)))
     assert blocks and not blocks[0].has_valid_nal
+
+
+class TestMediaClock:
+    """The timeline the archive is played by.
+
+    The recorder stamps keyframes only, and only to the second. Everything the
+    player does with time — pacing, the ×N speed, the cursor on the timeline —
+    is built on what this class makes of that.
+    """
+
+    #: A recording is a group of pictures every 1.2 s or so, twenty-five frames
+    #: at the twenty-one frames a second the recorder reports.
+    FPS = 21
+    START = datetime(2026, 8, 8, 21, 38, 57)
+
+    def gop(self, demuxer: FrameDemuxer, when: datetime) -> list:
+        data = iframe(VIDEO_PAYLOAD, fps=self.FPS, when=when)
+        data += pframe(PFRAME_PAYLOAD) * 24
+        return list(demuxer.feed(data))
+
+    def test_delta_frames_get_a_time_of_their_own(self) -> None:
+        """The whole point: without this, twenty-four frames in twenty-five have
+        no time and a player pacing itself by them shows one burst a second."""
+        clock = MediaClock()
+        stamps = [
+            clock.stamp(f, self.START) for f in self.gop(FrameDemuxer(), self.START)
+        ]
+
+        assert stamps == sorted(stamps), "the timeline steps backwards"
+        assert len(set(stamps)) == len(stamps), "two frames share a moment"
+        gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
+        # Floating seconds since the epoch resolve to about a quarter of a
+        # microsecond, so a millisecond is the honest tolerance here.
+        assert all(abs(gap - 1 / self.FPS) < 1e-3 for gap in gaps)
+
+    def test_rounding_to_the_second_never_drags_the_clock_back(self) -> None:
+        """A keyframe's stamp is truncated, so it is usually *behind* the truth.
+
+        Following it anyway would jerk playback back by up to a second at every
+        group of pictures — and hand the panel a position that jumps about.
+        """
+        demuxer = FrameDemuxer()
+        clock = MediaClock()
+        stamps = []
+        # Groups really 25/21 s apart; the recorder can only say 57, 58, 59.
+        for index in range(4):
+            when = self.START + timedelta(seconds=int(index * 25 / self.FPS))
+            stamps += [clock.stamp(f, self.START) for f in self.gop(demuxer, when)]
+
+        assert stamps == sorted(stamps)
+        expected = self.START.timestamp() + (len(stamps) - 1) / self.FPS
+        assert abs(stamps[-1] - expected) < 1e-4, "the clock was pulled off the truth"
+
+    def test_a_keyframe_that_is_genuinely_later_is_followed(self) -> None:
+        """Between recordings, and in a fast-scan, time really does jump."""
+        demuxer = FrameDemuxer()
+        clock = MediaClock()
+        for frame in self.gop(demuxer, self.START):
+            clock.stamp(frame, self.START)
+
+        later = self.START + timedelta(minutes=7)
+        jumped = [clock.stamp(f, later) for f in self.gop(demuxer, later)]
+        assert jumped[0] == later.timestamp()
+
+    def test_without_a_keyframe_the_recording_start_anchors_it(self) -> None:
+        """A stream joined mid group of pictures still has to start somewhere."""
+        clock = MediaClock()
+        deltas = list(FrameDemuxer().feed(pframe(PFRAME_PAYLOAD) * 3))
+        stamps = [clock.stamp(f, self.START) for f in deltas]
+        assert stamps[0] == self.START.timestamp()
+        assert stamps == sorted(stamps)

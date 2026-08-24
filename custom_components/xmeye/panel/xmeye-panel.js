@@ -449,13 +449,6 @@ const SETTINGS_GROUPS = [
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
 
-//: The speed at and above which playback switches to the recorder's fast-scan.
-//: At normal speeds the archive is played frame-for-frame on the client clock;
-//: from here the recorder itself thins the stream (OPPlayBack Value=2), and the
-//: client still paces it to the exact rate. Below this the full stream is used,
-//: because a thinned stream at 1x-2x would look choppy.
-const FAST_SCAN_RATE = 4;
-
 //: How long to wait for HLS playback to begin before calling it a failure.
 //: Home Assistant needs about thirteen seconds to bring up a stream from this
 //: recorder (measured: master_playlist waited 13.25 s), so allow headroom.
@@ -2258,7 +2251,9 @@ class XmeyePanel extends HTMLElement {
    */
   _playbackView() {
     const p = this._playback;
-    const rates = [1, 2, 4, 8, 16];
+    // The recorder hands an archive over at about seven times real time, so
+    // ×16 could never be reached and only ever showed as a broken promise.
+    const rates = [1, 2, 4, 8];
     return `
       <div class="player">
         <div class="player-head">
@@ -2283,20 +2278,14 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
-  /** Whether the current rate is served by the recorder's fast-scan. */
-  _isFastScan() {
-    return this._playback && this._playback.rate >= FAST_SCAN_RATE;
-  }
-
   /**
    * Start playback from a given moment.
    *
-   * One mechanism at every speed: a frame stream paced by the player's own
-   * clock. Below FAST_SCAN_RATE the recorder sends the full stream; at and above
-   * it, `fast=1` asks the recorder to thin the stream itself (OPPlayBack
-   * Value=2), which is the only server-side fast-forward the protocol has. The
-   * thinned frames are still real and decodable, so the same clock paces them to
-   * the exact requested rate and the actual speed reached shows in the OSD.
+   * One mechanism at every speed: the whole stream, paced by the player's own
+   * clock. The recorder hands an archive over at about seven times real time —
+   * measured on the device — so ×1 to ×4 play every frame, and beyond that the
+   * player thins what it cannot decode in time. The speed actually reached is
+   * shown beside the one asked for, because the link, not the wish, decides it.
    */
   async _startPlayback(when) {
     this._stopPlayback();
@@ -2315,7 +2304,6 @@ class XmeyePanel extends HTMLElement {
     const canvas = this.shadowRoot.getElementById("playcanvas");
     if (!canvas) return;
     const { NativePlayer: Player } = await nativeModule;
-    const fast = this._isFastScan();
     // Stopping a player rejects the fetch it is waiting on, and that rejection
     // lands after the next one has already started. Reporting it against
     // whatever is current then paints the fresh stream as broken — which is
@@ -2334,7 +2322,7 @@ class XmeyePanel extends HTMLElement {
       },
       this._playerLog,
       {},
-      { rate: this._playback.rate, decimated: fast }
+      { rate: this._playback.rate }
     );
     this._archivePlayer = player;
 
@@ -2342,7 +2330,6 @@ class XmeyePanel extends HTMLElement {
       start: toLocalIso(start),
       end: toLocalIso(end),
     });
-    if (fast) params.set("fast", "1");
     player
       .start(
         `/api/xmeye/playback/${this._entryId}/${this._selectedChannel}?${params}`,
@@ -3298,18 +3285,12 @@ class XmeyePanel extends HTMLElement {
     root.querySelectorAll(".rate").forEach((button) =>
       button.addEventListener("click", () => {
         const rate = Number(button.dataset.rate);
-        const wasFast = this._isFastScan();
-        const from = new Date(this._playback.position || this._playback.start);
         this._playback.rate = rate;
+        this._playback.actual = null;
         root.querySelectorAll(".rate").forEach((b) => b.classList.toggle("active", b === button));
-        // Crossing the full-stream / fast-scan boundary means a different
-        // request, so the stream restarts; staying on the same side only
-        // re-paces the clock.
-        if (wasFast !== this._isFastScan()) {
-          this._startPlayback(from);
-        } else if (this._archivePlayer) {
-          this._archivePlayer.setRate(rate);
-        }
+        // Every speed reads the same stream, so changing one only re-paces the
+        // clock. Nothing is re-requested and the picture does not blink.
+        if (this._archivePlayer) this._archivePlayer.setRate(rate);
       })
     );
 
