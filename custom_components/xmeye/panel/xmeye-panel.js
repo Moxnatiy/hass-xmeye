@@ -157,35 +157,35 @@ const ISSUE_URL_LIMIT = 6000;
 const SETTINGS_GROUPS = [
   {
     id: "general",
-    title: "Загальні",
+    title: "General",
     section: "General.General",
-    hint: "Назва пристрою та поведінка при заповненому диску.",
+    hint: "The device name, and what happens when the disk fills up.",
     fields: [
-      { key: "MachineName", label: "Назва пристрою", type: "text" },
+      { key: "MachineName", label: "Device name", type: "text" },
       {
         key: "OverWrite",
-        label: "Коли диск заповнений",
+        label: "When the disk is full",
         type: "select",
         options: [
-          ["OverWrite", "Перезаписувати найстаріше"],
-          ["StopRecord", "Зупинити запис"],
+          ["OverWrite", "Overwrite the oldest"],
+          ["StopRecord", "Stop recording"],
         ],
       },
-      { key: "AutoLogout", label: "Автовихід з меню, хв", type: "number", min: 0, max: 120,
-        hint: "0 — не виходити" },
-      { key: "ScreenSaveTime", label: "Заставка, хв", type: "number", min: 0, max: 120 },
-      { key: "BandWidthTips", label: "Підказка про смугу", type: "bool01" },
+      { key: "AutoLogout", label: "Log out of the menu after, min", type: "number", min: 0, max: 120,
+        hint: "0 does not log out" },
+      { key: "ScreenSaveTime", label: "Screensaver, min", type: "number", min: 0, max: 120 },
+      { key: "BandWidthTips", label: "Bandwidth hint", type: "bool01" },
     ],
   },
   {
     id: "locale",
-    title: "Час і мова",
+    title: "Time and language",
     section: "General.Location",
-    hint: "Формат дати й часу, мова меню самого реєстратора.",
+    hint: "Date and time format, and the language of the recorder's own menu.",
     fields: [
       {
         key: "Language",
-        label: "Мова меню",
+        label: "Menu language",
         type: "select",
         options: [
           ["English", "English"],
@@ -195,231 +195,233 @@ const SETTINGS_GROUPS = [
       },
       {
         key: "DateFormat",
-        label: "Формат дати",
+        label: "Date format",
         type: "select",
-        options: [["YYMMDD", "РР-ММ-ДД"], ["MMDDYY", "ММ-ДД-РР"], ["DDMMYY", "ДД-ММ-РР"]],
+        options: [["YYMMDD", "YY-MM-DD"], ["MMDDYY", "MM-DD-YY"], ["DDMMYY", "DD-MM-YY"]],
       },
       {
         key: "DateSeparator",
-        label: "Роздільник дати",
+        label: "Date separator",
         type: "select",
         options: [["-", "-"], ["/", "/"], [".", "."]],
       },
       {
         key: "TimeFormat",
-        label: "Формат часу",
+        label: "Time format",
         type: "select",
-        options: [["24", "24 години"], ["12", "12 годин"]],
+        options: [["24", "24 hours"], ["12", "12 hours"]],
       },
       {
         key: "DSTRule",
-        label: "Літній час",
+        label: "Daylight saving",
         type: "select",
-        options: [["Off", "Вимкнено"], ["On", "Увімкнено"]],
+        options: [["Off", "Off"], ["On", "On"]],
       },
     ],
   },
   {
     id: "maintain",
-    title: "Обслуговування",
+    title: "Maintenance",
     section: "General.AutoMaintain",
-    hint: "Плановий перезапуск і автовидалення старих записів.",
+    hint: "Scheduled reboot, and deleting old recordings automatically.",
     fields: [
       {
         key: "AutoRebootDay",
-        label: "Перезапуск",
+        label: "Reboot",
         type: "select",
         options: [
-          ["Never", "Ніколи"],
-          ["Everyday", "Щодня"],
-          ["Sunday", "Щонеділі"],
-          ["Monday", "Щопонеділка"],
+          ["Never", "Never"],
+          ["Everyday", "Every day"],
+          ["Sunday", "Every Sunday"],
+          ["Monday", "Every Monday"],
         ],
       },
-      { key: "AutoRebootHour", label: "Година перезапуску", type: "number", min: 0, max: 23 },
+      { key: "AutoRebootHour", label: "Reboot hour", type: "number", min: 0, max: 23 },
       {
         key: "AutoDeleteFilesDays",
-        label: "Видаляти записи, старші за (днів)",
+        label: "Delete recordings older than (days)",
         type: "number",
         min: 0,
         max: 365,
-        hint: "0 — не видаляти за віком",
+        hint: "0 does not delete by age",
       },
     ],
   },
   {
     id: "screen",
-    title: "Екран і OSD",
+    title: "Screen and OSD",
     section: "fVideo.GUISet",
-    hint: "Що реєстратор малює поверх відео на власному моніторі.",
+    hint: "What the recorder draws over the video on its own monitor.",
     fields: [
-      { key: "ChannelTitleEnable", label: "Назва каналу", type: "bool" },
-      { key: "TimeTitleEnable", label: "Час", type: "bool" },
-      { key: "RecordStateEnable", label: "Значок запису", type: "bool" },
-      { key: "AlarmStateEnable", label: "Значок тривоги", type: "bool" },
-      { key: "ChanStateBitRateEnable", label: "Бітрейт каналу", type: "bool" },
-      { key: "ChanStateMtdEnable", label: "Значок руху", type: "bool" },
-      { key: "ChanStateVlsEnable", label: "Значок втрати відео", type: "bool" },
-      { key: "ChanWindowGridEnable", label: "Сітка вікон", type: "bool" },
-      { key: "QRcodeEnable", label: "QR-код", type: "bool" },
-      { key: "Deflick", label: "Придушення мерехтіння", type: "bool" },
-      { key: "WindowAlpha", label: "Прозорість накладок", type: "number", min: 0, max: 255 },
+      { key: "ChannelTitleEnable", label: "Camera name", type: "bool" },
+      { key: "TimeTitleEnable", label: "Time", type: "bool" },
+      { key: "RecordStateEnable", label: "Recording mark", type: "bool" },
+      { key: "AlarmStateEnable", label: "Alarm mark", type: "bool" },
+      { key: "ChanStateBitRateEnable", label: "Channel bitrate", type: "bool" },
+      { key: "ChanStateMtdEnable", label: "Motion mark", type: "bool" },
+      { key: "ChanStateVlsEnable", label: "Video loss mark", type: "bool" },
+      { key: "ChanWindowGridEnable", label: "Window grid", type: "bool" },
+      { key: "QRcodeEnable", label: "QR code", type: "bool" },
+      { key: "Deflick", label: "Flicker suppression", type: "bool" },
+      { key: "WindowAlpha", label: "Overlay opacity", type: "number", min: 0, max: 255 },
     ],
   },
   {
     id: "disk-low",
-    title: "Диск — мало місця",
+    title: "Disk — low on space",
     section: "Storage.StorageLowSpace",
-    hint: "Що робити, коли на диску лишається мало вільного місця.",
+    hint: "What to do when little free space is left on the disk.",
     fields: [
-      { key: "Enable", label: "Стежити за вільним місцем", type: "bool" },
-      { key: "LowerLimit", label: "Поріг, % вільного", type: "number", min: 1, max: 99 },
-      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+      { key: "Enable", label: "Watch the free space", type: "bool" },
+      { key: "LowerLimit", label: "Threshold, % free", type: "number", min: 1, max: 99 },
+      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
     ],
   },
   {
     id: "disk-fail",
-    title: "Диск — помилка",
+    title: "Disk — failure",
     section: "Storage.StorageFailure",
-    hint: "Реакція на помилку диска.",
+    hint: "What to do when the disk fails.",
     fields: [
-      { key: "Enable", label: "Стежити за помилками", type: "bool" },
-      { key: "RebootEnable", label: "Перезавантажувати при помилці", type: "bool" },
-      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+      { key: "Enable", label: "Watch for failures", type: "bool" },
+      { key: "RebootEnable", label: "Reboot on failure", type: "bool" },
+      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
     ],
   },
   {
     id: "disk-none",
-    title: "Диск — відсутній",
+    title: "Disk — missing",
     section: "Storage.StorageNotExist",
-    hint: "Реакція на відсутній диск.",
+    hint: "What to do when no disk is present.",
     fields: [
-      { key: "Enable", label: "Стежити", type: "bool" },
-      { key: "EventHandler.MessageEnable", label: "Показувати повідомлення", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
+      { key: "Enable", label: "Watch", type: "bool" },
+      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
     ],
   },
   {
     id: "network",
-    title: "Мережа",
+    title: "Network",
     section: "NetWork.NetCommon",
     //: The address fields are not here on purpose. HostIP, GateWay and Submask
     //: are little-endian hex, and a wrong one takes the recorder off the network
     //: with no way back through this panel.
     warning:
-      "Зміна портів розірве поточне з'єднання: після збереження оновіть порт у налаштуваннях інтеграції. IP, шлюз і маску тут навмисно не редагуються.",
+      "Changing a port breaks the current connection: after saving, update the " +
+      "port in the integration options. The address, gateway and mask are " +
+      "deliberately not editable here.",
     fields: [
-      { key: "HostName", label: "Мережеве ім'я", type: "text" },
-      { key: "HttpPort", label: "HTTP-порт", type: "number", min: 1, max: 65535 },
-      { key: "TCPPort", label: "DVRIP-порт", type: "number", min: 1, max: 65535,
-        hint: "Порт, яким користується ця інтеграція" },
-      { key: "UDPPort", label: "UDP-порт", type: "number", min: 1, max: 65535 },
-      { key: "TCPMaxConn", label: "Макс. одночасних з'єднань", type: "number", min: 4, max: 32 },
-      { key: "MaxBps", label: "Обмеження смуги, кбіт/с", type: "number", min: 0, max: 100000,
-        hint: "0 — без обмеження" },
-      { key: "MonMode", label: "Транспорт перегляду", type: "select",
+      { key: "HostName", label: "Network name", type: "text" },
+      { key: "HttpPort", label: "HTTP port", type: "number", min: 1, max: 65535 },
+      { key: "TCPPort", label: "DVRIP port", type: "number", min: 1, max: 65535,
+        hint: "The port this integration uses" },
+      { key: "UDPPort", label: "UDP port", type: "number", min: 1, max: 65535 },
+      { key: "TCPMaxConn", label: "Max simultaneous connections", type: "number", min: 4, max: 32 },
+      { key: "MaxBps", label: "Bandwidth cap, kbit/s", type: "number", min: 0, max: 100000,
+        hint: "0 means no cap" },
+      { key: "MonMode", label: "Live transport", type: "select",
         options: [["TCP", "TCP"], ["UDP", "UDP"]] },
-      { key: "TransferPlan", label: "Пріоритет передачі", type: "text",
-        hint: "Значення таке саме, як у меню самого реєстратора" },
-      { key: "UseHSDownLoad", label: "Швидке завантаження", type: "bool" },
+      { key: "TransferPlan", label: "Transfer priority", type: "text",
+        hint: "The same value as in the recorder's own menu" },
+      { key: "UseHSDownLoad", label: "Fast download", type: "bool" },
     ],
   },
   {
     id: "ntp",
-    title: "Час із мережі (NTP)",
+    title: "Network time (NTP)",
     section: "NetWork.NetNTP",
-    hint: "Синхронізація годинника реєстратора з сервером часу.",
+    hint: "Keeping the recorder's clock in step with a time server.",
     fields: [
-      { key: "Enable", label: "Увімкнути NTP", type: "bool" },
-      { key: "Server.Name", label: "Сервер", type: "text" },
-      { key: "Server.Port", label: "Порт", type: "number", min: 1, max: 65535 },
-      { key: "TimeZone", label: "Часовий пояс (індекс)", type: "number", min: 0, max: 40 },
-      { key: "UpdatePeriod", label: "Період оновлення, хв", type: "number", min: 1, max: 1440 },
+      { key: "Enable", label: "Enable NTP", type: "bool" },
+      { key: "Server.Name", label: "Server", type: "text" },
+      { key: "Server.Port", label: "Port", type: "number", min: 1, max: 65535 },
+      { key: "TimeZone", label: "Time zone (index)", type: "number", min: 0, max: 40 },
+      { key: "UpdatePeriod", label: "Update period, min", type: "number", min: 1, max: 1440 },
     ],
   },
   {
     id: "motion",
-    title: "Детекція руху",
+    title: "Motion detection",
     section: "Detect.MotionDetect",
     perChannel: true,
-    hint: "Чутливість і реакція на рух. Зона детекції зберігається як є — вона редагується сіткою на самому реєстраторі.",
+    hint: "Sensitivity, and what happens on motion. The detection area is saved as it is — it is edited on a grid on the recorder itself.",
     fields: [
-      { key: "Enable", label: "Увімкнено", type: "bool" },
-      { key: "Level", label: "Чутливість", type: "select",
-        options: [[1, "1 — найнижча"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — найвища"]],
+      { key: "Enable", label: "Enabled", type: "bool" },
+      { key: "Level", label: "Sensitivity", type: "select",
+        options: [[1, "1 — lowest"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — highest"]],
         numeric: true },
-      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
     ],
   },
   {
     id: "blind",
-    title: "Засліплення камери",
+    title: "Camera blinded",
     section: "Detect.BlindDetect",
     perChannel: true,
-    hint: "Реакція на перекриту або засліплену камеру.",
+    hint: "What to do when a camera is covered or blinded.",
     fields: [
-      { key: "Enable", label: "Увімкнено", type: "bool" },
-      { key: "Level", label: "Чутливість", type: "select",
-        options: [[1, "1 — найнижча"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — найвища"]],
+      { key: "Enable", label: "Enabled", type: "bool" },
+      { key: "Level", label: "Sensitivity", type: "select",
+        options: [[1, "1 — lowest"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — highest"]],
         numeric: true },
-      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
     ],
   },
   {
     id: "loss",
-    title: "Втрата відео",
+    title: "Video loss",
     section: "Detect.LossDetect",
     perChannel: true,
-    hint: "Реакція на зникнення сигналу з камери.",
+    hint: "What to do when a camera stops sending a signal.",
     fields: [
-      { key: "Enable", label: "Увімкнено", type: "bool" },
-      { key: "EventHandler.RecordEnable", label: "Вмикати запис", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Тривалість запису, с", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Повідомлення", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Стоп-кадр", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Звуковий сигнал", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Надсилати пошту", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Вивантажувати на FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Писати в журнал", type: "bool" },
+      { key: "Enable", label: "Enabled", type: "bool" },
+      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
+      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
+      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
+      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
+      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
+      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
+      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
     ],
   },
   {
     id: "widget",
-    title: "Накладки на канал",
+    title: "Channel overlays",
     section: "AVEnc.VideoWidget",
     perChannel: true,
-    hint: "Назва каналу й час поверх картинки. Координати — у сітці 0…8191, незалежній від роздільності.",
+    hint: "The camera name and the time drawn over the picture. Coordinates are on a 0…8191 grid, independent of the resolution.",
     fields: [
-      { key: "ChannelTitle.Name", label: "Назва каналу", type: "text" },
-      { key: "ChannelTitleAttribute.PreviewBlend", label: "Назва: показувати на моніторі", type: "bool" },
-      { key: "ChannelTitleAttribute.EncodeBlend", label: "Назва: вписувати у відеопотік", type: "bool" },
-      { key: "ChannelTitleAttribute.RelativePos.0", label: "Назва: X", type: "number", min: 0, max: 8191 },
-      { key: "ChannelTitleAttribute.RelativePos.1", label: "Назва: Y", type: "number", min: 0, max: 8191 },
-      { key: "TimeTitleAttribute.PreviewBlend", label: "Час: показувати на моніторі", type: "bool" },
-      { key: "TimeTitleAttribute.EncodeBlend", label: "Час: вписувати у відеопотік", type: "bool" },
-      { key: "TimeTitleAttribute.RelativePos.0", label: "Час: X", type: "number", min: 0, max: 8191 },
-      { key: "TimeTitleAttribute.RelativePos.1", label: "Час: Y", type: "number", min: 0, max: 8191 },
+      { key: "ChannelTitle.Name", label: "Camera name", type: "text" },
+      { key: "ChannelTitleAttribute.PreviewBlend", label: "Name: show on the monitor", type: "bool" },
+      { key: "ChannelTitleAttribute.EncodeBlend", label: "Name: burn into the stream", type: "bool" },
+      { key: "ChannelTitleAttribute.RelativePos.0", label: "Name: X", type: "number", min: 0, max: 8191 },
+      { key: "ChannelTitleAttribute.RelativePos.1", label: "Name: Y", type: "number", min: 0, max: 8191 },
+      { key: "TimeTitleAttribute.PreviewBlend", label: "Time: show on the monitor", type: "bool" },
+      { key: "TimeTitleAttribute.EncodeBlend", label: "Time: burn into the stream", type: "bool" },
+      { key: "TimeTitleAttribute.RelativePos.0", label: "Time: X", type: "number", min: 0, max: 8191 },
+      { key: "TimeTitleAttribute.RelativePos.1", label: "Time: Y", type: "number", min: 0, max: 8191 },
     ],
   },
   {
@@ -427,19 +429,19 @@ const SETTINGS_GROUPS = [
     title: "PTZ",
     section: "Uart.PTZ",
     perChannel: true,
-    hint: "Керування поворотною камерою через послідовний порт.",
+    hint: "Driving a pan-tilt-zoom camera over the serial port.",
     fields: [
-      { key: "ProtocolName", label: "Протокол", type: "text",
-        hint: "Назва така сама, як у меню реєстратора (напр. PELCOD)" },
-      { key: "DeviceNo", label: "Адреса пристрою", type: "number", min: 1, max: 255 },
-      { key: "PortNo", label: "Номер порту", type: "number", min: 1, max: 8 },
-      { key: "Attribute.0", label: "Швидкість, біт/с", type: "select", numeric: true,
+      { key: "ProtocolName", label: "Protocol", type: "text",
+        hint: "The same name as in the recorder's menu (PELCOD, for example)" },
+      { key: "DeviceNo", label: "Device address", type: "number", min: 1, max: 255 },
+      { key: "PortNo", label: "Port number", type: "number", min: 1, max: 8 },
+      { key: "Attribute.0", label: "Speed, bit/s", type: "select", numeric: true,
         options: [[1200, "1200"], [2400, "2400"], [4800, "4800"], [9600, "9600"],
                   [19200, "19200"], [38400, "38400"], [57600, "57600"], [115200, "115200"]] },
-      { key: "Attribute.1", label: "Парність", type: "text",
-        hint: "Значення таке саме, як у меню реєстратора (напр. NONE)" },
-      { key: "Attribute.2", label: "Біти даних", type: "number", min: 5, max: 8 },
-      { key: "Attribute.3", label: "Стоп-біти", type: "number", min: 1, max: 2 },
+      { key: "Attribute.1", label: "Parity", type: "text",
+        hint: "The same value as in the recorder's menu (NONE, for example)" },
+      { key: "Attribute.2", label: "Data bits", type: "number", min: 5, max: 8 },
+      { key: "Attribute.3", label: "Stop bits", type: "number", min: 1, max: 2 },
     ],
   },
 ];
@@ -2653,13 +2655,13 @@ class XmeyePanel extends HTMLElement {
     const menu = SETTINGS_GROUPS.map(
       (g) =>
         `<button class="leaf ${g.id === group.id ? "active" : ""}" data-group="${g.id}">
-           ${g.title}
+           ${t(g.title)}
          </button>`
     ).join("");
 
     let body;
     if (!this._settings || this._settings.section !== group.section) {
-      body = `<div class="empty">Читаю налаштування…</div>`;
+      body = `<div class="empty">${t("Reading the settings…")}</div>`;
     } else if (this._settings.error) {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
     } else {
@@ -2675,23 +2677,23 @@ class XmeyePanel extends HTMLElement {
               : this._settingRead(value, field.key);
           return `
             <div class="setting">
-              <label for="set-${field.key}">${field.label}</label>
+              <label for="set-${field.key}">${t(field.label)}</label>
               ${this._settingInput(field, current)}
-              ${field.hint ? `<div class="hint">${field.hint}</div>` : ""}
+              ${field.hint ? `<div class="hint">${t(field.hint)}</div>` : ""}
             </div>`;
         })
         .join("");
       const dirty = Object.keys(this._settingsEdits).length;
       body = `
-        ${group.warning ? `<p class="warn">${group.warning}</p>` : ""}
+        ${group.warning ? `<p class="warn">${t(group.warning)}</p>` : ""}
         ${group.perChannel ? this._settingsChannelPicker() : ""}
-        ${group.hint ? `<p class="hint pad">${group.hint}</p>` : ""}
+        ${group.hint ? `<p class="hint pad">${t(group.hint)}</p>` : ""}
         <div class="settings-form">${rows}</div>
         <div class="toolbar">
           <button class="primary" id="savesettings" ${dirty && !this._settingsSaving ? "" : "disabled"}>
-            ${this._settingsSaving ? "Зберігаю…" : dirty ? `Зберегти (${dirty})` : "Змін немає"}
+            ${this._settingsSaving ? t("Saving…") : dirty ? t("Save ({count})", { count: dirty }) : t("No changes")}
           </button>
-          <button class="ghost" id="resetsettings" ${dirty ? "" : "disabled"}>Скинути</button>
+          <button class="ghost" id="resetsettings" ${dirty ? "" : "disabled"}>${t("Reset")}</button>
           ${this._settingsNote ? `<span class="hint">${escapeHtml(this._settingsNote)}</span>` : ""}
         </div>`;
     }
@@ -2700,7 +2702,7 @@ class XmeyePanel extends HTMLElement {
       <div class="split">
         <aside class="tree">${menu}</aside>
         <section class="viewer">
-          <div class="viewer-head">${group.title} <span class="hint">${group.section}</span></div>
+          <div class="viewer-head">${t(group.title)} <span class="hint">${group.section}</span></div>
           <div class="viewer-body">${body}</div>
         </section>
       </div>`;
@@ -2749,7 +2751,7 @@ class XmeyePanel extends HTMLElement {
           ([key, label]) =>
             `<option value="${escapeHtml(String(key))}" ${
               String(current) === String(key) ? "selected" : ""
-            }>${escapeHtml(label)}</option>`
+            }>${escapeHtml(t(label))}</option>`
         )
         .join("");
       return `<select id="${id}" data-field="${field.key}">${options}</select>`;
@@ -2776,7 +2778,7 @@ class XmeyePanel extends HTMLElement {
     const dirty = Object.keys(this._settingsEdits).length;
     if (save) {
       save.disabled = !dirty || this._settingsSaving;
-      save.textContent = dirty ? `Зберегти (${dirty})` : "Змін немає";
+      save.textContent = dirty ? t("Save ({count})", { count: dirty }) : t("No changes");
     }
     if (reset) reset.disabled = !dirty;
   }
@@ -2784,7 +2786,7 @@ class XmeyePanel extends HTMLElement {
   /** Channel selector for the sections that hold one entry per channel. */
   _settingsChannelPicker() {
     const channels = (this._detail && this._detail.channels) || [];
-    const options = (channels.length ? channels : [{ index: 0, name: "Канал 1" }])
+    const options = (channels.length ? channels : [{ index: 0, name: t("Channel {number}", { number: 1 }) }])
       .map(
         (c) =>
           `<option value="${c.index}" ${c.index === this._settingsChannel ? "selected" : ""}>
@@ -2794,7 +2796,7 @@ class XmeyePanel extends HTMLElement {
       .join("");
     return `
       <div class="toolbar">
-        <label class="hint" for="setchannel">Канал</label>
+        <label class="hint" for="setchannel">${t("Channel")}</label>
         <select id="setchannel">${options}</select>
       </div>`;
   }
@@ -2855,9 +2857,9 @@ class XmeyePanel extends HTMLElement {
       // it dislikes without saying so.
       this._settings = { section: group.section, value: reply.value };
       this._settingsEdits = {};
-      this._settingsNote = "Збережено";
+      this._settingsNote = t("Saved");
     } catch (err) {
-      this._settingsNote = `Не вдалося зберегти: ${err.message || err}`;
+      this._settingsNote = t("Could not save: {error}", { error: err.message || err });
     }
     this._settingsSaving = false;
     this._render();
@@ -2907,39 +2909,52 @@ class XmeyePanel extends HTMLElement {
             <div class="overlay-controls">
               <select id="player" title="${
                 insecure
-                  ? "Нативний плеєр недоступний: сторінка відкрита по http, а WebCodecs працює лише в захищеному контексті"
-                  : "Спосіб програвання"
+                  ? t(
+                      "The native player needs a secure context, and this page is " +
+                        "plain http"
+                    )
+                  : t("Playback method")
               }">
                 ${players
                   .map(
                     ([id, label]) =>
                       `<option value="${id}" ${
                         id === this._player ? "selected" : ""
-                      }>${label}</option>`
+                      }>${t(label)}</option>`
                   )
                   .join("")}
               </select>
-              <select id="livestream" title="Потік реєстратора">
-                <option value="sub" ${this._liveStream === "sub" ? "selected" : ""}>Додатковий</option>
-                <option value="main" ${this._liveStream === "main" ? "selected" : ""}>Основний</option>
+              <select id="livestream" title="${t("Recorder stream")}">
+                <option value="sub" ${this._liveStream === "sub" ? "selected" : ""}>${t("Extra")}</option>
+                <option value="main" ${this._liveStream === "main" ? "selected" : ""}>${t("Main")}</option>
               </select>
-              <button class="ghost" id="diag" title="Діагностика програвача">🛈</button>
+              <button class="ghost" id="diag" title="${t("Player diagnostics")}">🛈</button>
               <button class="close" id="closelive">✕</button>
             </div>
           </div>
           ${
             insecure
-              ? `<p class="warn">Нативний плеєр (WebCodecs) недоступний: сторінку відкрито по
-                   <b>http</b> на адресу ${escapeHtml(location.host)}, а браузер вмикає WebCodecs
-                   лише в захищеному контексті. Відкрийте Home Assistant по <b>https</b> або через
-                   <b>localhost</b> — і зʼявиться найменша затримка. Safari тут поблажливіший, тому
-                   в ньому може працювати те, чого немає в Chrome.</p>`
+              ? `<p class="warn">${t(
+                    "The native player (WebCodecs) is unavailable: this page was opened " +
+                      "over {http} at {host}, and browsers only enable WebCodecs in a " +
+                      "secure context. Open Home Assistant over {https} or through " +
+                      "{localhost} and the latency drops to its lowest. Safari is more " +
+                      "lenient here, so what is missing in Chrome may work in it.",
+                    {
+                      http: "<b>http</b>",
+                      https: "<b>https</b>",
+                      localhost: "<b>localhost</b>",
+                      host: escapeHtml(location.host),
+                    }
+                  )}</p>`
               : ""
           }
           ${
             channel.entity_id || this._player === "native"
-              ? `<div id="livecard" class="livecard"><div class="empty">Готую відео…</div></div>`
-              : `<div class="empty">Немає сутності камери для цього каналу.</div>`
+              ? `<div id="livecard" class="livecard"><div class="empty">${t(
+                  "Preparing the video…"
+                )}</div></div>`
+              : `<div class="empty">${t("No camera entity for this channel.")}</div>`
           }
           <div class="osd" id="osd">${this._osdText(channel)
             .map((line) => `<div>${escapeHtml(line)}</div>`)
@@ -2948,17 +2963,17 @@ class XmeyePanel extends HTMLElement {
             this._showDiag
               ? `<div class="diag">
                    <div class="diag-head">
-                     <span>Діагностика</span>
+                     <span>${t("Diagnostics")}</span>
                      <div class="diag-actions">
                        <label class="toggle">
                          <input type="checkbox" id="labkey" ${this._lab.keyOnly ? "checked" : ""}>
-                         лише ключові кадри
+                         ${t("keyframes only")}
                        </label>
                        <label class="toggle">
                          <input type="checkbox" id="labpaint" ${this._lab.noPaint ? "checked" : ""}>
-                         не малювати
+                         ${t("do not paint")}
                        </label>
-                       <button class="ghost" id="copydiag">Скопіювати</button>
+                       <button class="ghost" id="copydiag">${t("Copy")}</button>
                      </div>
                    </div>
                    <pre id="diagtext">${escapeHtml(this._diagText())}</pre>
@@ -2978,7 +2993,7 @@ class XmeyePanel extends HTMLElement {
    */
   _osdText(channel) {
     const osd = this._osd;
-    if (!osd) return ["вимірюю…", `канал ${channel.index + 1}`];
+    if (!osd) return [t("measuring…"), t("channel {channel}", { channel: channel.index + 1 })];
 
     // First line: what is playing and how. Second line: how well it goes.
     // The split is fixed so the line does not reflow as numbers change.
@@ -2995,17 +3010,20 @@ class XmeyePanel extends HTMLElement {
     if (osd.decoded !== undefined) {
       const total = osd.decoded + osd.dropped;
       const share = total ? ((osd.dropped / total) * 100).toFixed(1) : "0.0";
-      how.push(`втрачено ${String(osd.dropped).padStart(3, " ")} (${share.padStart(4, " ")}%)`);
+      how.push(t("dropped {count} ({share}%)", {
+        count: String(osd.dropped).padStart(3, " "),
+        share: share.padStart(4, " "),
+      }));
     }
     if (osd.latency !== null && osd.latency !== undefined) {
-      how.push(`затримка ${(osd.latency / 1000).toFixed(1).padStart(5, " ")} с`);
+      how.push(t("latency {seconds} s", { seconds: (osd.latency / 1000).toFixed(1).padStart(5, " ") }));
     }
-    if (osd.buffer !== undefined) how.push(`буфер ${osd.buffer.toFixed(1)} с`);
-    if (osd.queue) how.push(`у декодері ${osd.queue}`);
-    if (osd.backlog) how.push(`в черзі ${osd.backlog}`);
-    if (osd.restarts) how.push(`перезапусків ${osd.restarts}`);
-    how.push(`канал ${channel.index + 1}`);
-    if (channel.recording) how.push("запис");
+    if (osd.buffer !== undefined) how.push(t("buffer {seconds} s", { seconds: osd.buffer.toFixed(1) }));
+    if (osd.queue) how.push(t("in the decoder {count}", { count: osd.queue }));
+    if (osd.backlog) how.push(t("queued {count}", { count: osd.backlog }));
+    if (osd.restarts) how.push(t("restarts {count}", { count: osd.restarts }));
+    how.push(t("channel {channel}", { channel: channel.index + 1 }));
+    if (channel.recording) how.push(t("recording"));
     if (osd.error) how.push(`⚠ ${osd.error}`);
     if (this._fallbackNote) how.push(`↩ ${this._fallbackNote}`);
 
@@ -3023,64 +3041,64 @@ class XmeyePanel extends HTMLElement {
     const lines = [];
     const channel = this._detail?.channels.find((c) => c.index === this._live);
 
-    lines.push(`програвач: ${this._player}, потік: ${this._liveStream}`);
+    lines.push(`player: ${this._player}, stream: ${this._liveStream}`);
     if (channel) {
-      lines.push(`канал ${channel.index + 1} (${channel.name}), ${channel.resolution}`);
-      lines.push(`сутності: ${JSON.stringify(channel.entity_ids)}`);
+      lines.push(`channel ${channel.index + 1} (${channel.name}), ${channel.resolution}`);
+      lines.push(`entities: ${JSON.stringify(channel.entity_ids)}`);
     }
     // WebCodecs needs a secure context, so a recorder opened over plain http on
     // a LAN address has no VideoDecoder at all. That is the usual reason the
     // native player is missing, and without the origin in the report it looks
     // like a browser that simply cannot do it.
     lines.push(
-      `origin: ${location.origin}, захищений контекст: ${
-        window.isSecureContext ? "так" : "НІ — WebCodecs вимкнено браузером"
+      `origin: ${location.origin}, secure context: ${
+        window.isSecureContext ? "yes" : "NO — the browser disables WebCodecs"
       }`
     );
     lines.push(
-      `WebCodecs: ${typeof VideoDecoder !== "undefined" ? "є" : "немає"}, ` +
+      `WebCodecs: ${typeof VideoDecoder !== "undefined" ? "yes" : "no"}, ` +
         `MediaSource HEVC: ${
           window.MediaSource
             ? MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"')
-            : "невідомо"
+            : "unknown"
         }`
     );
 
     if (this._native) {
       lines.push("", this._native.report());
     } else if (true) {
-      lines.push("", `браузер: ${navigator.userAgent}`);
+      lines.push("", `browser: ${navigator.userAgent}`);
       const video = this._findVideo();
       if (video) {
         const q = video.getVideoPlaybackQuality
           ? video.getVideoPlaybackQuality()
           : null;
         lines.push(
-          `<video> ${video.videoWidth}x${video.videoHeight}, стан ${video.readyState}, ` +
-            `помилка ${video.error ? video.error.code : "немає"}, ` +
-            `буфер ${
+          `<video> ${video.videoWidth}x${video.videoHeight}, state ${video.readyState}, ` +
+            `error ${video.error ? video.error.code : "none"}, ` +
+            `buffer ${
               video.buffered.length
                 ? (video.buffered.end(video.buffered.length - 1) - video.currentTime).toFixed(1)
                 : 0
-            }с` + (q ? `, кадрів ${q.totalVideoFrames}, втрачено ${q.droppedVideoFrames}` : "")
+            }s` + (q ? `, frames ${q.totalVideoFrames}, dropped ${q.droppedVideoFrames}` : "")
         );
       } else if (this._snapshots) {
         lines.push(
-          `стоп-кадри: завантажено ${this._snapshots.loaded}, помилок ${this._snapshots.errors}`
+          `snapshots: loaded ${this._snapshots.loaded}, errors ${this._snapshots.errors}`
         );
       } else {
-        lines.push("програвач ще не створив жодного елемента");
+        lines.push("the player has created no element yet");
       }
       if (this._hlsSince) {
-        lines.push(`HLS вантажиться ${((performance.now() - this._hlsSince) / 1000).toFixed(1)}с`);
+        lines.push(`HLS loading for ${((performance.now() - this._hlsSince) / 1000).toFixed(1)}s`);
       }
     }
-    if (this._fallbackNote) lines.push("", `відступ: ${this._fallbackNote}`);
+    if (this._fallbackNote) lines.push("", `fallback: ${this._fallbackNote}`);
 
     // The log is always shown in full: it accumulates from the moment the view
     // opens and survives every switch.
     if (!this._native && this._diagLog.length) {
-      lines.push("", "── журнал ──");
+      lines.push("", "── log ──");
       lines.push(
         ...this._diagLog.map(
           (l) => `${(l.at || "").padStart(8)}  ${l.event}${l.detail ? "  " + l.detail : ""}`
@@ -3134,7 +3152,7 @@ class XmeyePanel extends HTMLElement {
       if (stalled) {
         this._hlsSince = null;
         this._player = "mjpeg";
-        this._fallbackNote = "HLS не запустився. Перейшов на стоп-кадри.";
+        this._fallbackNote = t("HLS did not start. Switched to snapshots.");
         this._remountLive();
         return;
       }
@@ -3442,10 +3460,10 @@ class XmeyePanel extends HTMLElement {
       copyReport.addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText(this._report || "");
-          copyReport.textContent = "Скопійовано";
-          setTimeout(() => (copyReport.textContent = "Копіювати"), 2000);
+          copyReport.textContent = t("Copied");
+          setTimeout(() => (copyReport.textContent = t("Copy")), 2000);
         } catch (err) {
-          copyReport.textContent = "Не вдалося";
+          copyReport.textContent = t("Failed");
         }
       });
 
@@ -3483,7 +3501,7 @@ class XmeyePanel extends HTMLElement {
         } catch (err) {
           /* the report stays on screen to copy by hand */
         }
-        const hint = "Звіт скопійовано в буфер — вставте його сюди.";
+        const hint = t("The report is on the clipboard — paste it here.");
         window.open(`${base}&body=${encodeURIComponent(hint)}`, "_blank", "noopener");
       });
 
@@ -3492,10 +3510,10 @@ class XmeyePanel extends HTMLElement {
       copyDiag.addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText(this._diagText());
-          copyDiag.textContent = "Скопійовано";
-          setTimeout(() => (copyDiag.textContent = "Скопіювати"), 2000);
+          copyDiag.textContent = t("Copied");
+          setTimeout(() => (copyDiag.textContent = t("Copy")), 2000);
         } catch (err) {
-          copyDiag.textContent = "Не вдалося";
+          copyDiag.textContent = t("Failed");
         }
       });
 

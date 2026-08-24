@@ -134,6 +134,20 @@ back; the channel picker is hidden by CSS rather than removed, for the same
 reason. The grid keeps its aspect ratio and is centred — stretching 4:3 cameras
 onto a 16:9 screen is worse than a black margin. Esc returns.
 
+The panel speaks English, Ukrainian, Spanish, French and German, following
+whatever language Home Assistant is set to — a change there reaches the panel on
+its next redraw. The English text is the key, so the code reads as what it will
+show and a missing translation falls back to something correct rather than to an
+identifier; tests check both directions, that every dictionary key still exists
+in the source and that every string the panel can show has a translation in
+every language.
+
+What the machine writes is never translated: the diagnostics log, the developer
+report and the shared log file are English wherever they are read, because they
+are read by whoever is fixing the thing. The exception proves the rule — the
+tile watcher quotes the caption verbatim, since that line records what the
+viewer saw.
+
 Corners and gaps are deliberately absent so the wall reads as one canvas.
 
 A wall is meant to be left open, so a tile that stops is brought back rather

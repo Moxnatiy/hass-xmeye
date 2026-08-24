@@ -26,12 +26,28 @@ CALL = re.compile(
 )
 PIECE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
+#: One string literal, or several joined by ``+`` — the same thing to JavaScript.
+JOINED = re.compile(r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*', re.S)
+
 #: Some text reaches ``t()`` through a table rather than as a literal — the
 #: reasons a channel gives, the stream and player names. Those tables are built
 #: once at load, before the language is known, so they hold the English source
 #: and are translated where they are used. Named here because a regex looking
 #: for ``t("…")`` cannot see through the indirection.
-INDIRECT = ("WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS")
+INDIRECT = ("WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS", "SETTINGS_GROUPS")
+
+#: Tables of ``[value, label]`` pairs, where only the label is ever shown.
+PAIRED = ("WALL_STREAMS", "PLAYERS")
+
+#: A string with no lowercase letter is the same in every language: a separator,
+#: a number, an acronym like HLS or TCP. Demanding a translation for those would
+#: fill four dictionaries with entries that copy their own key.
+SAME_EVERYWHERE = re.compile(r"[a-z]")
+
+#: A language is named in its own language wherever it is offered — the recorder
+#: menu list reads English / Русский / 简体中文 whoever is looking at it. Only the
+#: first of those has lowercase Latin letters, so only it needs saying here.
+NEVER_TRANSLATED = {"English"}
 
 #: A dictionary entry: a quoted key at the start of a line inside a language.
 ENTRY = re.compile(r'^\s{2}"((?:[^"\\]|\\.)*)":', re.MULTILINE)
@@ -61,7 +77,35 @@ def asked_for() -> set[str]:
     for name in INDIRECT:
         table = re.search(rf"^const {name} = [{{\[](.*?)^[}}\]];", text, re.M | re.S)
         assert table, f"{name} is gone from the panel; this test needs updating"
-        found |= set(re.findall(r'"((?:[^"\\]|\\.)*)"', table.group(1)))
+        if name == "SETTINGS_GROUPS":
+            found |= schema_strings(table.group(1))
+            continue
+        if name in PAIRED:
+            # ``["sub", "Sub"]`` — the first is what the code passes around, the
+            # second is what the viewer reads.
+            found |= set(re.findall(r'\[\s*"[^"]*"\s*,\s*"([^"]*)"\s*\]', table.group(1)))
+            continue
+        # Runs of literals joined by + are one string, here as in the calls.
+        for run in JOINED.findall(table.group(1)):
+            found.add("".join(PIECE.findall(run)))
+    return found
+
+
+def schema_strings(block: str) -> set[str]:
+    """The settings schema, whose every quoted string is not for the viewer.
+
+    A field carries a recorder key as well as a label, and an option carries the
+    value written back as well as the words shown; taking the lot would demand
+    translations of "OverWrite" and "115200".
+    """
+    found = set()
+    for named in re.finditer(r"(?:title|hint|label|warning):\s*(" + JOINED.pattern + ")", block):
+        found.add("".join(PIECE.findall(named.group(1))))
+    # Two-element arrays in this schema are always options, written across one
+    # line or several, so they are found directly rather than by first locating
+    # the ``options:`` they belong to.
+    for pair in re.finditer(r'\[\s*(?:"[^"]*"|\d+)\s*,\s*"([^"]*)"\s*\]', block):
+        found.add(pair.group(1))
     return found
 
 
@@ -93,6 +137,25 @@ def test_every_language_covers_the_same_ground(language: str) -> None:
     reference = max(languages.values(), key=len)
     missing = sorted(set(reference) - set(languages[language]))
     assert not missing, f"{language} is missing: {missing}"
+
+
+@pytest.mark.parametrize("language", sorted(set(dictionaries()) - {"EN"}))
+def test_every_string_the_panel_shows_is_translated(language: str) -> None:
+    """The other half of the orphan check, and the one a viewer notices.
+
+    An untranslated string does not fail anywhere — it simply appears in English
+    in the middle of a German page. Only counting them catches that.
+    """
+    wanted = {
+        text
+        for text in asked_for() - NEVER_TRANSLATED
+        if SAME_EVERYWHERE.search(text)
+    }
+    untranslated = sorted(wanted - set(dictionaries()[language]))
+    assert not untranslated, (
+        f"{language} has no translation for {len(untranslated)} strings, "
+        f"starting with: {untranslated[:5]}"
+    )
 
 
 def test_placeholders_match_the_source_text() -> None:
