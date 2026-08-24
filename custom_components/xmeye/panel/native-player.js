@@ -1043,29 +1043,20 @@ const MUX_HELLO = 2;
 const MUX_ERROR = 3;
 
 /**
- * One connection carrying every tile of the wall.
- *
- * A browser allows six connections per host on HTTP/1.1, so sixteen cameras
- * opened separately leave ten of them queued forever. This reads a single
- * response and hands each record to the player that owns that channel.
+ * What both wall transports have in common: players by channel, and a record
+ * format. Only the pipe differs — a byte stream that has to be reassembled, or
+ * a socket that preserves message boundaries for us.
  */
-export class MultiplexReader {
+class WallTransport {
   constructor(sharedLog, onChannelError) {
     this.players = new Map();
     //: Called when the server says a channel is in trouble, so the tile can say
     //: so instead of sitting on "connecting" for as long as the page is open.
     this.onChannelError = onChannelError || (() => {});
-    // Either an array to append to, or a function to call as events happen.
-    // The panel passes a function so its file log is written in real order.
-    this.sink = typeof sharedLog === "function" ? sharedLog : null;
-    this.log = this.sink ? [] : sharedLog || [];
-    this.controller = new AbortController();
+    this.log = sharedLog || [];
     this.bytes = 0;
-    //: Named by the server in the first record, so the channel set of this
-    //: response can be edited without reopening it.
-    this.session = null;
-    //: Settles once the session is known, or once the reader stops without
-    //: ever learning it — a caller waiting on it is never left hanging.
+    //: Settles once the connection is usable, or once it stops without ever
+    //: becoming usable — a caller waiting on it is never left hanging.
     this.ready = new Promise((resolve) => (this._announce = resolve));
     this._t0 = performance.now();
   }
@@ -1080,6 +1071,135 @@ export class MultiplexReader {
     if (!player) return;
     player.stop();
     this.players.delete(channel);
+  }
+
+  /** One record, whole, whatever carried it. */
+  _dispatch(kind, channel, flags, stamp, payload) {
+    if (kind === MUX_HELLO) {
+      this.session = JSON.parse(new TextDecoder().decode(payload)).session;
+      this._announce(this.session);
+    } else if (kind === MUX_ERROR) {
+      this.onChannelError(channel, JSON.parse(new TextDecoder().decode(payload)));
+    }
+    const player = this.players.get(channel);
+    if (!player) return;
+    if (kind === MUX_INFO) {
+      player.startFed(JSON.parse(new TextDecoder().decode(payload)));
+    } else if (kind === MUX_FRAME) {
+      player.pushFrame(payload, flags & 1, stamp);
+    }
+  }
+
+  /** Into the shared log, when there is one. A transport has no channel of its own. */
+  _say(event, detail) {
+    const entry = { at: `${((performance.now() - this._t0) / 1000).toFixed(2)}s`, event, detail };
+    if (typeof this.log === "function") this.log(entry);
+    else this.log.push(entry);
+  }
+}
+
+/**
+ * The wall over a WebSocket.
+ *
+ * The same records as the multiplexed response, on a connection that can be
+ * written to from both ends: the channel set is changed by sending a message
+ * rather than by opening a second request. One record per message, so nothing
+ * has to be reassembled here.
+ *
+ * A browser cannot put an authorization header on a WebSocket, so the address
+ * is signed by Home Assistant and handed over already usable.
+ */
+export class WallSocket extends WallTransport {
+  constructor(sharedLog, onChannelError) {
+    super(sharedLog, onChannelError);
+    this.socket = null;
+    this.stopped = false;
+    this._wanted = [];
+  }
+
+  /** Open, and say what to carry as soon as it is open. */
+  start(url, channels, stream) {
+    this._wanted = [...channels];
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      this.socket = socket;
+      this._stream = stream;
+
+      socket.addEventListener("open", () => {
+        this._say("socket open", `${this._wanted.length} channels`);
+        this._send();
+        this._announce("ws");
+        resolve();
+      });
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data === "string") return;
+        this.bytes += event.data.byteLength;
+        const view = new DataView(event.data);
+        const length = view.getUint32(4, true);
+        this._dispatch(
+          view.getUint8(0),
+          view.getUint16(1, true),
+          view.getUint8(3),
+          view.getFloat64(8, true),
+          new Uint8Array(event.data, MUX_HEADER_BYTES, length)
+        );
+      });
+      socket.addEventListener("error", () => {
+        // A WebSocket error carries nothing useful by design; the close that
+        // follows says whether it ever opened.
+        this._say("socket error", `after ${this.bytes} bytes`);
+      });
+      socket.addEventListener("close", (event) => {
+        this._announce(this.session);
+        if (this.stopped) return;
+        this._say("socket closed", `code ${event.code}, after ${this.bytes} bytes`);
+        // Rejecting only matters before it opened; afterwards the caller has
+        // long since moved on and the wall handles the loss per channel.
+        if (socket.readyState !== WebSocket.OPEN) {
+          reject(new Error(`socket closed (${event.code})`));
+        }
+      });
+    });
+  }
+
+  /** Tell the server which channels this socket should carry. */
+  setChannels(channels) {
+    this._wanted = [...channels];
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) this._send();
+  }
+
+  _send() {
+    this.socket.send(JSON.stringify({ channels: this._wanted, stream: this._stream }));
+  }
+
+  stop() {
+    this.stopped = true;
+    this._say("socket stopped", `by the panel, after ${this.bytes} bytes`);
+    this._announce();
+    if (this.socket) this.socket.close();
+    this.players.forEach((player) => player.stop());
+    this.players.clear();
+  }
+}
+
+/**
+ * One connection carrying every tile of the wall.
+ *
+ * A browser allows six connections per host on HTTP/1.1, so sixteen cameras
+ * opened separately leave ten of them queued forever. This reads a single
+ * response and hands each record to the player that owns that channel.
+ *
+ * Kept as the fallback for when the socket cannot be opened at all.
+ */
+export class MultiplexReader extends WallTransport {
+  constructor(sharedLog, onChannelError) {
+    super(sharedLog, onChannelError);
+    this.controller = new AbortController();
+    //: Named by the server in the first record, so the channel set of this
+    //: response can be edited without reopening it. The socket has no need of
+    //: one: it is told what to carry over itself.
+    this.session = null;
   }
 
   stop() {
@@ -1130,23 +1250,10 @@ export class MultiplexReader {
           const length = view.getUint32(4, true);
           const stamp = view.getFloat64(8, true);
           if (buffer.length < MUX_HEADER_BYTES + length) break;
-          const payload = buffer.subarray(MUX_HEADER_BYTES, MUX_HEADER_BYTES + length);
-          if (kind === MUX_HELLO) {
-            this.session = JSON.parse(new TextDecoder().decode(payload)).session;
-            this._announce(this.session);
-          } else if (kind === MUX_ERROR) {
-            const said = JSON.parse(new TextDecoder().decode(payload));
-            this.onChannelError(said.channel, said);
-          }
-          const player = this.players.get(channel);
-          if (player) {
-            if (kind === MUX_INFO) {
-              player.startFed(JSON.parse(new TextDecoder().decode(payload)));
-            } else if (kind === MUX_FRAME) {
-              // Copy: the buffer this points into is about to be advanced.
-              player.pushFrame(payload.slice(), flags & 1, stamp);
-            }
-          }
+          // Copied, because the buffer it points into is about to be advanced.
+          // The socket has no such problem: each message owns its bytes.
+          const payload = buffer.slice(MUX_HEADER_BYTES, MUX_HEADER_BYTES + length);
+          this._dispatch(kind, channel, flags, stamp, payload);
           buffer = buffer.subarray(MUX_HEADER_BYTES + length);
         }
       }
@@ -1159,12 +1266,5 @@ export class MultiplexReader {
     } finally {
       this._announce(this.session);
     }
-  }
-
-  /** Into the shared log, when there is one. The reader has no channel of its own. */
-  _say(event, detail) {
-    const entry = { at: `${((performance.now() - this._t0) / 1000).toFixed(2)}s`, event, detail };
-    if (typeof this.log === "function") this.log(entry);
-    else this.log.push(entry);
   }
 }

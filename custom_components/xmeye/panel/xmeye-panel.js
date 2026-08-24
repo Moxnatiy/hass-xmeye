@@ -508,6 +508,10 @@ class XmeyePanel extends HTMLElement {
     this._wallRetries = new Map();
     //: Set when the whole wall shares one connection.
     this._wallReader = null;
+    //: Set once a video socket has failed to open, so the fallback is not
+    //: rediscovered on every redraw. Cleared by a reload, which is the right
+    //: granularity: whatever broke the upgrade is a property of the network.
+    this._socketOff = false;
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -1813,8 +1817,8 @@ class XmeyePanel extends HTMLElement {
    * that channel; the players do the same decoding and drawing as ever.
    */
   async _startWallMultiplexed(wanted) {
-    const { MultiplexReader } = await nativeModule;
-    const reader = new MultiplexReader(this._playerLog, (channel, said) => {
+    const { MultiplexReader, WallSocket } = await nativeModule;
+    const trouble = (reader) => (channel, said) => {
       if (this._wallReader !== reader) return;
       const what = WALL_TROUBLE[said.reason] || said.reason;
       const next = said.attempt
@@ -1822,7 +1826,21 @@ class XmeyePanel extends HTMLElement {
         : "відновити не вдалося";
       this._noteDiag("стіна", `канал ${channel}: ${said.reason} ${said.detail || ""} ${next}`);
       this._updateWallCell(channel, { error: `${what} · ${next}` });
-    });
+    };
+
+    // The socket is the way in: one connection for the wall, and the channel set
+    // changed by writing to it rather than by opening a second request. The
+    // streamed response stays as the fallback for anything that will not carry a
+    // WebSocket — a proxy that strips the upgrade, most often.
+    const address = await this._socketAddress();
+    let reader;
+    if (address) {
+      reader = new WallSocket(this._playerLog, null);
+      reader.onChannelError = trouble(reader);
+    } else {
+      reader = new MultiplexReader(this._playerLog, null);
+      reader.onChannelError = trouble(reader);
+    }
     this._wallReader = reader;
 
     const channels = [];
@@ -1835,14 +1853,53 @@ class XmeyePanel extends HTMLElement {
       channels.push(index);
     }
 
-    const params = new URLSearchParams({ channels: channels.join(","), stream: "sub" });
-    reader
-      .start(`/api/xmeye/native/${this._entryId}?${params}`, await this._token())
-      .catch((err) => {
-        if (this._wallReader !== reader) return;
-        this._noteDiag("стіна", `спільне з'єднання впало: ${err.message || err}`);
-        channels.forEach((index) => this._failWallTile(index, err));
+    const opened = address
+      ? reader.start(address, channels, "sub")
+      : reader.start(
+          `/api/xmeye/native/${this._entryId}?${new URLSearchParams({
+            channels: channels.join(","),
+            stream: "sub",
+          })}`,
+          await this._token()
+        );
+    opened.catch(async (err) => {
+      if (this._wallReader !== reader) return;
+      this._noteDiag("стіна", `спільне з'єднання впало: ${err.message || err}`);
+      // A socket that never opened is a transport problem, not a camera problem,
+      // and retrying the same transport would only repeat it.
+      if (address && !reader.bytes) {
+        this._noteDiag("стіна", "сокет не піднявся, переходжу на потокову відповідь");
+        this._stopWall();
+        this._socketOff = true;
+        await this._startWall();
+        return;
+      }
+      channels.forEach((index) => this._failWallTile(index, err));
+    });
+  }
+
+  /**
+   * A signed address for the video socket, or nothing if it cannot be had.
+   *
+   * A browser cannot put an authorization header on a WebSocket, so Home
+   * Assistant signs the path against this user and the address itself is the
+   * permission. It is asked for fresh each time: it expires in minutes, and a
+   * wall may be opened hours after the page was.
+   */
+  async _socketAddress() {
+    if (this._socketOff || typeof WebSocket === "undefined") return null;
+    try {
+      const { path } = await this._ws({
+        type: "xmeye/stream_url",
+        entry_id: this._entryId,
       });
+      const url = new URL(path, location.href);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      return url.toString();
+    } catch (err) {
+      this._noteDiag("стіна", `підписана адреса недоступна: ${err.message || err}`);
+      return null;
+    }
   }
 
   /** Bring up one tile on the stream chosen for its channel. */
@@ -2042,19 +2099,25 @@ class XmeyePanel extends HTMLElement {
     const reader = this._wallReader;
     if (!reader) return;
     await reader.ready;
-    if (!reader.session || this._wallReader !== reader) return;
+    if (this._wallReader !== reader) return;
 
-    // Only what this response carries — not the whole wall, which may also hold
-    // tiles on their own connections.
+    // Only what this connection carries — not the whole wall, which may also
+    // hold tiles on their own connections.
     const channels = [...reader.players.keys()];
     if (!channels.length) {
-      // Nothing left to carry. An empty channel set is not a thing the endpoint
-      // accepts, and an idle response would hold a connection for nothing.
+      // Nothing left to carry. An empty channel set is not a thing either end
+      // accepts, and an idle connection would be held for nothing.
       this._noteDiag("стіна", "спільне з'єднання більше не потрібне");
       reader.stop();
       this._wallReader = null;
       return;
     }
+    if (reader.setChannels) {
+      // Over a socket the change is a message on the connection it is about.
+      reader.setChannels(channels);
+      return;
+    }
+    if (!reader.session) return;
     const response = await fetch(`/api/xmeye/native/${this._entryId}/mux`, {
       method: "POST",
       headers: {

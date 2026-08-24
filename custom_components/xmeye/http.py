@@ -28,7 +28,7 @@ import time
 from datetime import datetime
 from http import HTTPStatus
 
-from aiohttp import web
+from aiohttp import WSCloseCode, WSMsgType, web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
@@ -53,6 +53,10 @@ MUX_SESSIONS = f"{DOMAIN}_mux_sessions"
 #: One socket carries every tile, so a camera that outruns the browser must not
 #: be allowed to starve the others.
 MUX_QUEUE = 240
+
+#: How often the video socket pings. A wall is watched for hours without the
+#: viewer touching anything, and an idle connection is what proxies reap.
+WS_HEARTBEAT = 25.0
 
 #: How long to wait for a frame before considering the stream dead.
 FRAME_TIMEOUT = 20.0
@@ -601,6 +605,95 @@ class XmeyeMultiplexView(HomeAssistantView):
         return response
 
 
+class XmeyeWallSocketView(HomeAssistantView):
+    """The wall over a WebSocket: frames out, channel changes in.
+
+    The same records as the multiplexed response, on a connection that can be
+    written to from both ends. That folds the separate control request back in —
+    a browser cannot write into a request whose response it is still reading,
+    which is why changing a channel needed one — and it costs a socket the
+    browser counts against a limit of 255 rather than 6.
+
+    One record per message, so nothing has to be reassembled at the other end:
+    a WebSocket preserves message boundaries where a byte stream does not.
+
+    Authorization arrives in the address, signed by Home Assistant, because a
+    browser cannot put a header on a WebSocket.
+    """
+
+    url = "/api/xmeye/ws/{entry_id}"
+    name = "api:xmeye:ws"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request, entry_id: str) -> web.WebSocketResponse:
+        coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
+        socket = web.WebSocketResponse(heartbeat=WS_HEARTBEAT, max_msg_size=0)
+        await socket.prepare(request)
+        if coordinator is None:
+            await socket.close(code=WSCloseCode.POLICY_VIOLATION, message=b"no recorder")
+            return socket
+
+        queue: asyncio.Queue[tuple[int, int, int, float, bytes]] = asyncio.Queue(MUX_QUEUE)
+        session: _MuxSession | None = None
+        writer: asyncio.Task | None = None
+        sent = 0
+
+        async def pump_to_socket() -> None:
+            nonlocal sent
+            while True:
+                kind, channel, flags, stamp, payload = await queue.get()
+                # Awaited, not fired and forgotten: this is where a browser that
+                # reads slowly pushes back on us, and the queue above it is what
+                # decides which frames to drop when it does.
+                await socket.send_bytes(
+                    _MUX_HEADER.pack(kind, channel, flags, len(payload), stamp) + payload
+                )
+                sent += 1
+
+        try:
+            debuglog.note(self.hass, "ws", "socket opened")
+            async for message in socket:
+                if message.type is not WSMsgType.TEXT:
+                    continue
+                try:
+                    said = message.json()
+                except ValueError:
+                    continue
+
+                try:
+                    channels = _parse_channels(said.get("channels", ""))
+                except (ValueError, TypeError):
+                    continue
+                if not channels:
+                    continue
+
+                if session is None:
+                    wanted = said.get("stream", "sub")
+                    session = _MuxSession(
+                        self.hass,
+                        coordinator.config_entry,
+                        StreamType.MAIN if wanted == STREAM_MAIN else StreamType.EXTRA1,
+                        queue,
+                    )
+                    writer = asyncio.create_task(pump_to_socket())
+                session.set_channels(channels)
+        except (asyncio.CancelledError, ConnectionResetError):
+            _LOGGER.debug("Video socket for %s closed by the client", entry_id)
+        finally:
+            if writer is not None:
+                writer.cancel()
+                await asyncio.gather(writer, return_exceptions=True)
+            if session is not None:
+                await session.close()
+            _LOGGER.debug("Video socket for %s: %d records", entry_id, sent)
+            debuglog.note(self.hass, "ws", f"socket closed after {sent} records")
+
+        return socket
+
+
 class XmeyeMultiplexControlView(HomeAssistantView):
     """Edit the channel set of a running multiplexed response.
 
@@ -713,3 +806,4 @@ def async_register_http(hass: HomeAssistant) -> None:
     hass.http.register_view(XmeyeMultiplexView(hass))
     hass.http.register_view(XmeyeMultiplexControlView())
     hass.http.register_view(XmeyeDebugLogView(hass))
+    hass.http.register_view(XmeyeWallSocketView(hass))

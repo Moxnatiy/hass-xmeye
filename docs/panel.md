@@ -82,6 +82,24 @@ of them queued forever, retrying and never starting. One response carries every
 tile, with the channel named in each record, and the players decode exactly as
 before.
 
+That connection is a WebSocket. The records are the same, but a socket can be
+written to from both ends, so changing which channels the wall carries is a
+message on the connection it is about rather than a second request — a browser
+cannot write into a request whose response it is still reading, which is why one
+was needed. A socket also preserves message boundaries, so each record arrives
+whole and nothing is reassembled. Browsers count sockets against a limit of 255
+rather than 6.
+
+A browser cannot put an authorization header on a WebSocket, so the address
+carries the permission instead: Home Assistant signs the path against the
+caller's own refresh token, and it expires in minutes. The channel list is not
+part of the address — signing covers the query too, and the socket can simply be
+told what to carry once it is open.
+
+The streamed HTTP response remains as the fallback, for anything that will not
+carry a WebSocket; a socket that never opens switches to it once rather than
+rediscovering the problem on every redraw.
+
 The trade is a shared pipe: if the browser falls behind, every tile slows
 together rather than one at a time. For a wall that is the better failure.
 

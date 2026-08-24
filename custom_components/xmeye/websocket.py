@@ -9,6 +9,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, callback
 
@@ -31,6 +32,11 @@ _LOGGER = logging.getLogger(__name__)
 
 #: Recordings returned to the panel at once, to keep messages small.
 MAX_RECORDINGS = 2000
+
+#: How long a signed video-socket address stays usable. A browser cannot put an
+#: authorization header on a WebSocket, so the address carries the permission
+#: instead; it only has to survive the moment between asking and connecting.
+STREAM_URL_LIFETIME = timedelta(minutes=2)
 
 
 def _coordinators(hass: HomeAssistant) -> dict[str, XmeyeCoordinator]:
@@ -59,6 +65,38 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_config_set)
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_report)
+    websocket_api.async_register_command(hass, ws_stream_url)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/stream_url",
+        vol.Required("entry_id"): str,
+    }
+)
+@callback
+def ws_stream_url(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """A signed address for the video socket.
+
+    A browser cannot set an authorization header on a WebSocket, so the address
+    itself carries the permission: Home Assistant signs the path against the
+    caller's own refresh token, which it takes from this connection. Nothing
+    secret travels in it — the signature is a claim about this path, minted for
+    this user, and it expires in minutes.
+
+    The channel list is deliberately not part of the address. Signing covers the
+    query as well, so any parameter would have to be signed with it, and the
+    socket can simply be told what to carry once it is open.
+    """
+    if msg["entry_id"] not in _coordinators(hass):
+        connection.send_error(
+            msg["id"], websocket_api.const.ERR_NOT_FOUND, "Recorder not found"
+        )
+        return
+    path = async_sign_path(hass, f"/api/xmeye/ws/{msg['entry_id']}", STREAM_URL_LIFETIME)
+    connection.send_result(msg["id"], {"path": path})
 
 
 @websocket_api.websocket_command(
