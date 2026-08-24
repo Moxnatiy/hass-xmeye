@@ -18,14 +18,20 @@ SOURCE = PANEL / "xmeye-panel.js"
 I18N = PANEL / "i18n.js"
 
 #: ``t("some text")`` and ``t("some text", { ... })`` — what the panel asks for.
-CALL = re.compile(r"""\bt\(\s*"((?:[^"\\]|\\.)*)"\s*[,)]""")
+#: A long sentence is written as adjacent literals joined by ``+`` so the source
+#: keeps its line width; JavaScript concatenates them into the one key the
+#: dictionary holds, and so does this.
+CALL = re.compile(
+    r"""\bt\(\s*("(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*)\s*[,)]""", re.S
+)
+PIECE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 #: Some text reaches ``t()`` through a table rather than as a literal — the
 #: reasons a channel gives, the stream and player names. Those tables are built
 #: once at load, before the language is known, so they hold the English source
 #: and are translated where they are used. Named here because a regex looking
 #: for ``t("…")`` cannot see through the indirection.
-INDIRECT = ("WALL_TROUBLE", "WALL_STREAMS", "PLAYERS")
+INDIRECT = ("WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS")
 
 #: A dictionary entry: a quoted key at the start of a line inside a language.
 ENTRY = re.compile(r'^\s{2}"((?:[^"\\]|\\.)*)":', re.MULTILINE)
@@ -51,7 +57,7 @@ def dictionaries() -> dict[str, dict[str, str]]:
 def asked_for() -> set[str]:
     """Every English string the panel can put on screen."""
     text = SOURCE.read_text(encoding="utf-8")
-    found = set(CALL.findall(text))
+    found = {"".join(PIECE.findall(call)) for call in CALL.findall(text)}
     for name in INDIRECT:
         table = re.search(rf"^const {name} = [{{\[](.*?)^[}}\]];", text, re.M | re.S)
         assert table, f"{name} is gone from the panel; this test needs updating"

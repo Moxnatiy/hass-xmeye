@@ -462,11 +462,12 @@ const HLS_TIMEOUT = 35000;
 //: How often to refresh the grid thumbnails.
 const THUMB_INTERVAL = 10000;
 
+//: English here and translated where used, like the other tables built at load.
 const EVENT_LABELS = {
-  schedule: "За розкладом",
-  motion: "Рух",
-  alarm: "Тривога",
-  manual: "Вручну",
+  schedule: "On schedule",
+  motion: "Motion",
+  alarm: "Alarm",
+  manual: "Manual",
 };
 
 const EVENT_COLORS = {
@@ -2222,8 +2223,8 @@ class XmeyePanel extends HTMLElement {
     const enabled = d.channels.filter((c) => c.enabled);
     const rec = this._recordings;
 
-    let body = `<div class="empty">Оберіть день і натисніть «Показати».</div>`;
-    if (rec && rec.loading) body = `<div class="empty">Шукаю записи…</div>`;
+    let body = `<div class="empty">${t("Pick a day and press Show.")}</div>`;
+    if (rec && rec.loading) body = `<div class="empty">${t("Looking for recordings…")}</div>`;
     else if (rec && rec.error) body = `<div class="empty error">${rec.error}</div>`;
     else if (rec && rec.recordings) body = this._timeline(rec);
 
@@ -2240,7 +2241,7 @@ class XmeyePanel extends HTMLElement {
             .join("")}
         </select>
         <input type="date" id="day" value="${this._recordingsDay}">
-        <button class="primary" id="search">Показати</button>
+        <button class="primary" id="search">${t("Show")}</button>
       </div>
       ${this._playback ? this._playbackView() : ""}
       ${body}`;
@@ -2259,14 +2260,14 @@ class XmeyePanel extends HTMLElement {
     return `
       <div class="player">
         <div class="player-head">
-          <span>${fmtClockFull(p.start)} — канал ${this._selectedChannel + 1}</span>
+          <span>${fmtClockFull(p.start)} — ${t("channel {channel}", { channel: this._selectedChannel + 1 })}</span>
           <button class="ghost" id="closeplay">✕</button>
         </div>
         <div class="player-screen"><canvas id="playcanvas"></canvas></div>
         <div class="player-bar">
           <button class="ghost" id="playpause">${p.paused ? "▶" : "⏸"}</button>
-          <button class="ghost" id="stepback" title="назад на 10 с">⏪</button>
-          <button class="ghost" id="stepfwd" title="вперед на 10 с">⏩</button>
+          <button class="ghost" id="stepback" title="${t("back 10 s")}">⏪</button>
+          <button class="ghost" id="stepfwd" title="${t("forward 10 s")}">⏩</button>
           <div class="rates">
             ${rates
               .map(
@@ -2394,7 +2395,7 @@ class XmeyePanel extends HTMLElement {
       const actual = this._playback.actual;
       label.textContent =
         fmtClockFull(this._playback.position) +
-        (actual ? `  (фактично ×${actual.toFixed(1)})` : "");
+        (actual ? t("  (really ×{rate})", { rate: actual.toFixed(1) }) : "");
     }
 
     const cursor = this.shadowRoot.getElementById("cursor");
@@ -2407,7 +2408,7 @@ class XmeyePanel extends HTMLElement {
 
   _timeline(rec) {
     if (!rec.recordings.length)
-      return `<div class="empty">За ${this._recordingsDay} записів немає.</div>`;
+      return `<div class="empty">${t("Nothing recorded on {day}.", { day: this._recordingsDay })}</div>`;
 
     const dayStart = new Date(`${this._recordingsDay}T00:00:00`).getTime();
     const dayMs = 86400000;
@@ -2420,7 +2421,7 @@ class XmeyePanel extends HTMLElement {
         const color = EVENT_COLORS[r.event] || "var(--primary-color)";
         return `<div class="block" style="left:${left}%;width:${width}%;background:${color}"
                      title="${fmtTime(r.begin)} → ${fmtTime(r.end)} · ${
-          EVENT_LABELS[r.event] || r.event
+          t(EVENT_LABELS[r.event] || r.event)
         } · ${fmtBytes(r.size)}"></div>`;
       })
       .join("");
@@ -2443,21 +2444,22 @@ class XmeyePanel extends HTMLElement {
           </div>
           <div class="hours">${hours}</div>
         </div>
-        <div class="hint">Клацніть по шкалі, щоб почати відтворення з цього моменту.</div>
+        <div class="hint">${t("Click the bar to play from that moment.")}</div>
         <div class="legend">
           ${Object.entries(byEvent)
             .map(
               ([event, count]) =>
                 `<span class="chip"><i style="background:${
                   EVENT_COLORS[event] || "var(--primary-color)"
-                }"></i>${EVENT_LABELS[event] || event}: ${count}</span>`
+                }"></i>${t(EVENT_LABELS[event] || event)}: ${count}</span>`
             )
             .join("")}
-          <span class="chip">Усього: ${rec.count} · ${fmtBytes(rec.total_bytes)}</span>
+          <span class="chip">${t("Total: {count}", { count: rec.count })} · ${fmtBytes(rec.total_bytes)}</span>
         </div>
       </div>
       <table class="data">
-        <thead><tr><th>Початок</th><th>Кінець</th><th>Подія</th><th>Розмір</th><th>Файл</th></tr></thead>
+        <thead><tr><th>${t("Start")}</th><th>${t("End")}</th><th>${t("Event")}</th>
+              <th>${t("Size")}</th><th>${t("File")}</th></tr></thead>
         <tbody>
           ${rec.recordings
             .slice(0, 300)
@@ -2468,7 +2470,7 @@ class XmeyePanel extends HTMLElement {
               <td>${fmtClock(r.end)}</td>
               <td><span class="chip small"><i style="background:${
                 EVENT_COLORS[r.event] || "var(--primary-color)"
-              }"></i>${EVENT_LABELS[r.event] || r.event}</span></td>
+              }"></i>${t(EVENT_LABELS[r.event] || r.event)}</span></td>
               <td>${fmtBytes(r.size)}</td>
               <td class="mono">${r.name.split("/").pop()}</td>
             </tr>`
@@ -2478,15 +2480,15 @@ class XmeyePanel extends HTMLElement {
       </table>
       ${
         rec.recordings.length > 300
-          ? `<div class="hint pad">Показано перші 300 із ${rec.recordings.length}.</div>`
+          ? `<div class="hint pad">${t("Showing the first 300 of {count}.", { count: rec.recordings.length })}</div>`
           : ""
       }`;
   }
 
   _config() {
     const tree = this._configTree;
-    if (!tree) return `<div class="empty"><button class="primary" id="loadconfig">Прочитати конфігурацію</button></div>`;
-    if (tree.loading) return `<div class="empty">Читаю дерево конфігурації…</div>`;
+    if (!tree) return `<div class="empty"><button class="primary" id="loadconfig">${t("Read the configuration")}</button></div>`;
+    if (tree.loading) return `<div class="empty">${t("Reading the configuration tree…")}</div>`;
     if (tree.error) return `<div class="empty error">${tree.error}</div>`;
 
     const roots = Object.entries(tree.roots)
@@ -2508,9 +2510,9 @@ class XmeyePanel extends HTMLElement {
       )
       .join("");
 
-    let viewer = `<div class="empty">Оберіть секцію ліворуч.</div>`;
+    let viewer = `<div class="empty">${t("Pick a section on the left.")}</div>`;
     if (this._configValue) {
-      if (this._configValue.loading) viewer = `<div class="empty">Читаю…</div>`;
+      if (this._configValue.loading) viewer = `<div class="empty">${t("Reading…")}</div>`;
       else if (this._configValue.error)
         viewer = `<div class="empty error">${this._configValue.error}</div>`;
       else
@@ -2523,7 +2525,7 @@ class XmeyePanel extends HTMLElement {
       <div class="split">
         <aside class="tree">${roots}</aside>
         <section class="viewer">
-          <div class="viewer-head">${this._configSection || "Конфігурація"}</div>
+          <div class="viewer-head">${this._configSection || t("Configuration")}</div>
           ${viewer}
         </section>
       </div>`;
@@ -2552,22 +2554,25 @@ class XmeyePanel extends HTMLElement {
     const on = this._logToFile;
     return `
       <div class="card">
-        <h2>Спільний журнал</h2>
+        <h2>${t("Shared log")}</h2>
         <p class="hint pad">
-          Панель і серверна частина пишуть в один файл <code>xmeye-debug.log</code>
-          поруч із конфігурацією Home Assistant, за спільним відліком часу від
-          завантаження сторінки. Так видно послідовність подій, що тривають
-          частки секунди — наприклад, чому плитка блимнула при оновленні.
+          ${t(
+            "The panel and the server write into one file, {file}, beside the Home " +
+              "Assistant configuration, on one clock counted from the page load. That " +
+              "shows the order of events lasting fractions of a second — why a tile " +
+              "blinked on refresh, for instance.",
+            { file: "<code>xmeye-debug.log</code>" }
+          )}
         </p>
         <p class="hint pad">
-          Вимкнено за замовчуванням, нічого нікуди не надсилається.
-          ${on ? "Запис триває — оновіть сторінку, щоб зафіксувати запуск." : ""}
+          ${t("Off by default, and nothing is sent anywhere.")}
+          ${on ? t("Recording — reload the page to capture a start.") : ""}
         </p>
         <div class="toolbar">
           <button class="${on ? "ghost" : "primary"}" id="togglelog">
-            ${on ? "Зупинити запис" : "Почати запис"}
+            ${on ? t("Stop recording") : t("Start recording")}
           </button>
-          <button class="ghost" id="showlog">Показати файл</button>
+          <button class="ghost" id="showlog">${t("Show the file")}</button>
         </div>
         ${this._logFile ? `<pre class="report">${escapeHtml(this._logFile)}</pre>` : ""}
       </div>`;
@@ -2578,27 +2583,32 @@ class XmeyePanel extends HTMLElement {
       return `
         ${this._logFileCard()}
         <div class="card">
-          <h2>Звіт для розробника</h2>
+          <h2>${t("Developer report")}</h2>
           <p class="hint pad">
-            Збирає модель, прошивку, перелік можливостей реєстратора, налаштування
-            кодування та стан програвача — те, що потрібно, щоб зрозуміти поведінку
-            саме вашого пристрою.
+            ${t(
+              "Collects the model, the firmware, what the recorder can do, the encoder " +
+                "settings and the state of the player — what is needed to understand how " +
+                "your particular device behaves."
+            )}
           </p>
           <p class="hint pad">
-            Паролі, хеші, серійні номери, MAC- та IP-адреси вирізаються автоматично.
-            Звіт нікуди не надсилається сам — ви його копіюєте або відкриваєте issue.
+            ${t(
+              "Passwords, hashes, serial numbers, MAC and IP addresses are stripped " +
+                "automatically. The report is not sent anywhere by itself — you copy it " +
+                "or open an issue."
+            )}
           </p>
-          <button class="primary" id="buildreport">Зібрати звіт</button>
+          <button class="primary" id="buildreport">${t("Build the report")}</button>
         </div>`;
     }
     return `
       ${this._logFileCard()}
       <div class="card">
         <div class="toolbar">
-          <button class="primary" id="copyreport">Копіювати</button>
-          <button class="ghost" id="downloadreport">Завантажити .md</button>
-          <button class="ghost" id="issuereport">Створити issue на GitHub</button>
-          <button class="ghost" id="buildreport">Оновити</button>
+          <button class="primary" id="copyreport">${t("Copy")}</button>
+          <button class="ghost" id="downloadreport">${t("Download .md")}</button>
+          <button class="ghost" id="issuereport">${t("Open an issue on GitHub")}</button>
+          <button class="ghost" id="buildreport">${t("Refresh")}</button>
         </div>
         <pre class="report">${escapeHtml(this._report)}</pre>
       </div>`;
@@ -2620,7 +2630,7 @@ class XmeyePanel extends HTMLElement {
         "```",
       ].join("\n");
     } catch (err) {
-      this._report = `Не вдалося зібрати звіт: ${err.message || err}`;
+      this._report = t("Could not build the report: {error}", { error: err.message || err });
     }
     this._render();
   }
@@ -2855,14 +2865,15 @@ class XmeyePanel extends HTMLElement {
 
   _logView() {
     const log = this._log;
-    if (!log) return `<div class="empty"><button class="primary" id="loadlog">Прочитати журнал</button></div>`;
-    if (log.loading) return `<div class="empty">Читаю журнал…</div>`;
+    if (!log) return `<div class="empty"><button class="primary" id="loadlog">${t("Read the log")}</button></div>`;
+    if (log.loading) return `<div class="empty">${t("Reading the log…")}</div>`;
     if (log.error) return `<div class="empty error">${log.error}</div>`;
-    if (!log.entries.length) return `<div class="empty">Журнал порожній.</div>`;
+    if (!log.entries.length) return `<div class="empty">${t("The log is empty.")}</div>`;
 
     return `
       <table class="data">
-        <thead><tr><th>Час</th><th>Подія</th><th>Користувач</th><th>Деталі</th></tr></thead>
+        <thead><tr><th>${t("Time")}</th><th>${t("Event")}</th>
+              <th>${t("User")}</th><th>${t("Details")}</th></tr></thead>
         <tbody>
           ${log.entries
             .map(
@@ -3411,9 +3422,9 @@ class XmeyePanel extends HTMLElement {
           const reply = await fetch("/api/xmeye/debug", {
             headers: { Authorization: `Bearer ${await this._token()}` },
           }).then((r) => r.json());
-          this._logFile = reply.text || "Файл порожній.";
+          this._logFile = reply.text || t("The file is empty.");
         } catch (err) {
-          this._logFile = `Не вдалося прочитати: ${err.message || err}`;
+          this._logFile = t("Could not read it: {error}", { error: err.message || err });
         }
         this._render();
       });
@@ -3421,7 +3432,7 @@ class XmeyePanel extends HTMLElement {
     const buildReport = root.getElementById("buildreport");
     if (buildReport)
       buildReport.addEventListener("click", () => {
-        buildReport.textContent = "Збираю…";
+        buildReport.textContent = t("Building…");
         buildReport.disabled = true;
         this._buildReport();
       });
