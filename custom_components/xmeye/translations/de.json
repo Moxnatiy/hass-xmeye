@@ -1,0 +1,290 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XMeye / Xiongmai NVR",
+        "description": "Mit einem Rekorder im lokalen Netzwerk verbinden (DVRIP, Port 34567).",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "port": "DVRIP-Port",
+          "rtsp_port": "RTSP-Port"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Passwort geändert",
+        "description": "Gib das aktuelle Passwort für {host} ein.",
+        "data": {
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Rekorder ist nicht erreichbar",
+      "invalid_auth": "Falscher Benutzername oder falsches Passwort",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "abort": {
+      "already_configured": "Dieser Rekorder ist bereits eingerichtet",
+      "reauth_successful": "Die erneute Anmeldung war erfolgreich"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "XMeye-Optionen",
+        "data": {
+          "channels": "Kanäle, die angelegt werden",
+          "stream": "Kamerastream",
+          "snapshot_stream": "Stream für Schnappschüsse",
+          "default_player": "Player im Panel",
+          "default_live_stream": "Livestream im Panel",
+          "scan_interval": "Aktualisierungsintervall",
+          "max_connections": "Maximale Verbindungen des Geräts (TCPMaxConn)",
+          "use_rtsp": "RTSP für Livevideo verwenden",
+          "enable_panel": "XMeye-Panel in der Seitenleiste anzeigen"
+        },
+        "data_description": {
+          "stream": "Der Substream ist beim Transkodieren deutlich leichter; der Hauptstream ist 4K.",
+          "default_player": "Mit welchem Player das Panel öffnet. Nativ (WebCodecs) hat die geringste Latenz.",
+          "max_connections": "Wird in den Rekorder geschrieben. Begrenzt, wie viele Streams gleichzeitig laufen; über 10 hält sich nicht jede Firmware daran.",
+          "use_rtsp": "Nur abschalten, wenn RTSP am Rekorder deaktiviert ist."
+        }
+      }
+    }
+  },
+  "selector": {
+    "stream": {
+      "options": {
+        "main": "Hauptstream",
+        "sub": "Substream"
+      }
+    },
+    "player": {
+      "options": {
+        "native": "Nativ (WebCodecs)",
+        "hls": "HLS",
+        "mjpeg": "Schnappschüsse"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "uptime": {
+        "name": "Betriebszeit"
+      },
+      "total_bitrate": {
+        "name": "Gesamtbitrate"
+      },
+      "channels_online": {
+        "name": "Kanäle online"
+      },
+      "recording_channels": {
+        "name": "Aufnehmende Kanäle"
+      },
+      "disk_used": {
+        "name": "Speicher belegt"
+      },
+      "disk_free": {
+        "name": "Speicher frei"
+      },
+      "archive_from": {
+        "name": "Archivbeginn"
+      },
+      "archive_to": {
+        "name": "Archivende"
+      },
+      "device_time": {
+        "name": "Rekorderzeit"
+      },
+      "channel_bitrate": {
+        "name": "Bitrate"
+      }
+    },
+    "binary_sensor": {
+      "recording": {
+        "name": "Aufnahme"
+      },
+      "motion_any": {
+        "name": "Bewegung"
+      },
+      "disk_problem": {
+        "name": "Speicherproblem"
+      },
+      "alarm_input": {
+        "name": "Alarmeingang"
+      },
+      "channel_motion": {
+        "name": "Bewegung"
+      },
+      "channel_recording": {
+        "name": "Aufnahme"
+      },
+      "channel_online": {
+        "name": "Verbunden"
+      },
+      "channel_video_loss": {
+        "name": "Videoverlust"
+      },
+      "channel_blind": {
+        "name": "Kamera verdeckt"
+      }
+    },
+    "switch": {
+      "channel_motion_detect": {
+        "name": "Bewegungserkennung"
+      },
+      "channel_blind_detect": {
+        "name": "Verdeckungserkennung"
+      },
+      "channel_loss_detect": {
+        "name": "Videoverlusterkennung"
+      }
+    },
+    "button": {
+      "reboot": {
+        "name": "Neu starten"
+      },
+      "sync_time": {
+        "name": "Zeit synchronisieren"
+      }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "PTZ-Steuerung",
+      "description": "Eine PTZ-Kamera bewegen oder eine Position anfahren.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Mit welchem Rekorder gesprochen wird."
+        },
+        "direction": {
+          "name": "Richtung",
+          "description": "Befehl für Bewegung oder Objektiv."
+        },
+        "channel": {
+          "name": "Kanal",
+          "description": "Kanalnummer, gezählt ab 0."
+        },
+        "speed": {
+          "name": "Geschwindigkeit",
+          "description": "Schrittweite, 1 bis 8."
+        },
+        "duration": {
+          "name": "Dauer",
+          "description": "Wie lange bewegt wird, in Sekunden."
+        },
+        "preset": {
+          "name": "Position",
+          "description": "Diese gespeicherte Position anfahren, statt zu bewegen."
+        }
+      }
+    },
+    "search_recordings": {
+      "name": "Aufnahmen suchen",
+      "description": "Aufnahmen im Archiv für einen Kanal und einen Zeitraum auflisten.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Welcher Rekorder abgefragt wird."
+        },
+        "channel": {
+          "name": "Kanal",
+          "description": "Kanalnummer, gezählt ab 0."
+        },
+        "start": {
+          "name": "Beginn",
+          "description": "Anfang des Zeitraums."
+        },
+        "end": {
+          "name": "Ende",
+          "description": "Ende des Zeitraums."
+        },
+        "event": {
+          "name": "Ereignis",
+          "description": "* alles, M Bewegung, A Alarm, R Zeitplan, H manuell."
+        }
+      }
+    },
+    "download_recording": {
+      "name": "Aufnahme herunterladen",
+      "description": "Eine Aufnahme als Elementarstrom in den Medienordner herunterladen.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Welcher Rekorder abgefragt wird."
+        },
+        "filename": {
+          "name": "Dateiname",
+          "description": "Name aus „Aufnahmen suchen“."
+        },
+        "start": {
+          "name": "Beginn",
+          "description": "Startzeit der Aufnahme."
+        },
+        "end": {
+          "name": "Ende",
+          "description": "Endzeit der Aufnahme."
+        },
+        "channel": {
+          "name": "Kanal",
+          "description": "Kanalnummer, gezählt ab 0."
+        }
+      }
+    },
+    "get_config": {
+      "name": "Konfiguration lesen",
+      "description": "Einen Konfigurationsabschnitt aus dem Rekorder lesen.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Welcher Rekorder abgefragt wird."
+        },
+        "section": {
+          "name": "Abschnitt",
+          "description": "Zum Beispiel NetWork.NetCommon."
+        }
+      }
+    },
+    "set_config": {
+      "name": "Konfiguration schreiben",
+      "description": "Einen Konfigurationsabschnitt zurück in den Rekorder schreiben.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Welcher Rekorder geändert wird."
+        },
+        "section": {
+          "name": "Abschnitt",
+          "description": "Zum Beispiel General.Location."
+        },
+        "value": {
+          "name": "Wert",
+          "description": "Vollständiger Inhalt des Abschnitts."
+        }
+      }
+    },
+    "talk": {
+      "name": "Audio abspielen",
+      "description": "G.711-Audio an den Lautsprecher des Rekorders senden.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Rekorder",
+          "description": "Mit welchem Rekorder gesprochen wird."
+        },
+        "audio_file": {
+          "name": "Audiodatei",
+          "description": "Pfad zu rohem G.711-A-law-Audio."
+        }
+      }
+    }
+  },
+  "issues": {
+    "new_channels": {
+      "title": "Neue Kameras an {title}",
+      "description": "Der Rekorder meldet Kameras, die diese Integration nicht anlegt: {names}.\n\nSie wurden nach der Einrichtung angeschlossen und stehen deshalb nicht in den ausgewählten Kanälen. Öffne die Optionen der Integration und hake die an, die du als Entitäten haben möchtest."
+    }
+  }
+}

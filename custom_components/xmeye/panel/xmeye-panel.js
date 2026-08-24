@@ -648,7 +648,7 @@ class XmeyePanel extends HTMLElement {
       this._logToFile = reply.enabled;
       localStorage.setItem("xmeye-log-file", reply.enabled ? "1" : "0");
       if (reply.enabled) {
-        this._noteDiag("журнал", `запис увімкнено на сервері · ${navigator.userAgent}`);
+        this._noteDiag("log", `switched on by the server · ${navigator.userAgent}`);
         this._beginLogging();
         this._watchTiles();
       } else {
@@ -688,12 +688,12 @@ class XmeyePanel extends HTMLElement {
     try {
       if (auth && auth.expired && typeof auth.refreshAccessToken === "function") {
         await auth.refreshAccessToken();
-        this._noteDiag("токен оновлено");
+        this._noteDiag("token refreshed");
       }
     } catch (err) {
       // Not fatal on its own: the stale token may still be accepted, and the
       // request will say so plainly if it is not.
-      this._noteDiag("не вдалося оновити токен", String(err.message || err));
+      this._noteDiag("token refresh failed", String(err.message || err));
     }
     return auth && auth.accessToken;
   }
@@ -722,7 +722,7 @@ class XmeyePanel extends HTMLElement {
     // paints is empty — the tiles arrive on the second one. That pair is worth
     // seeing in the log, because it is a redraw between a player starting and
     // its first frame.
-    this._renderReason = "деталі завантажуються";
+    this._renderReason = "details loading";
     this._render();
     try {
       this._detail = await this._ws({ type: "xmeye/device", entry_id: this._entryId });
@@ -746,7 +746,7 @@ class XmeyePanel extends HTMLElement {
       this._error = err.message || String(err);
     }
     this._loading = false;
-    this._renderReason = "деталі отримано";
+    this._renderReason = "details arrived";
     this._render();
   }
 
@@ -1055,7 +1055,7 @@ class XmeyePanel extends HTMLElement {
    */
   _fallbackFromNative(reason) {
     if (this._live === null || this._player !== "native") return;
-    this._noteDiag("відступ", reason);
+    this._noteDiag("falling back", reason);
     if (this._liveStream === "main") {
       this._liveStream = "sub";
       this._fallbackNote = `${reason}. Перейшов на додатковий потік.`;
@@ -1104,7 +1104,7 @@ class XmeyePanel extends HTMLElement {
   /** Rebuild the player after the playback method or stream changes. */
   _remountLive() {
     const channel = this._detail.channels.find((c) => c.index === this._live);
-    this._noteDiag("перемикання", `плеєр ${this._player}, потік ${this._liveStream}`);
+    this._noteDiag("switching", `player ${this._player}, stream ${this._liveStream}`);
     this._render();
     if (channel) this._mountLiveCard(this._entityForStream(channel));
   }
@@ -1133,7 +1133,7 @@ class XmeyePanel extends HTMLElement {
     });
     // Worth a line in the log rather than a silent repair: if this appears
     // often, a redraw is landing in the middle of starting the wall.
-    if (orphaned.length) this._noteDiag("стіна", `полотно повернуто: ${orphaned}`);
+    if (orphaned.length) this._noteDiag("wall", `canvas put back: ${orphaned}`);
     return canvases;
   }
 
@@ -1238,27 +1238,36 @@ class XmeyePanel extends HTMLElement {
     this._watchTimer = setInterval(() => {
       if (performance.now() > until) {
         clearInterval(this._watchTimer);
-        this._noteDiag("плитки", "спостереження завершено");
+        this._noteDiag("tiles", "watch finished");
         return;
       }
       this.shadowRoot.querySelectorAll("canvas[data-wall]").forEach((canvas) => {
         const index = Number(canvas.dataset.wall);
         const foot = this.shadowRoot.querySelector(`[data-field="wall${index}"]`);
         const state = [
-          this._tileHasPicture(canvas) ? "картинка" : "порожньо",
+          this._tileHasPicture(canvas) ? "picture" : "blank",
           `${canvas.width}x${canvas.height}`,
-          canvas.isConnected ? "" : "ПОЗА DOM",
-          `"${foot ? foot.textContent.trim().slice(0, 44) : "немає підпису"}"`,
+          canvas.isConnected ? "" : "OUT OF DOM",
+          `"${foot ? foot.textContent.trim().slice(0, 44) : "no caption"}"`,
         ]
           .filter(Boolean)
           .join(" · ");
         if (seen.get(index) === state) return;
         seen.set(index, state);
-        this._noteDiag("плитка", `ch${index} ${state}`);
+        this._noteDiag("tile", `ch${index} ${state}`);
       });
     }, 100);
   }
 
+  /**
+   * Record an event in the diagnostics log.
+   *
+   * English, always, whatever the panel is showing. This log is read by whoever
+   * is fixing the thing — it goes into the shared file, into the developer
+   * report, into an issue on GitHub — and a report nobody but its author can
+   * read is worth less than no report. Everything the *viewer* reads is
+   * translated; everything about the machine is not.
+   */
   _noteDiag(event, detail) {
     const at = new Date().toTimeString().slice(0, 8);
     this._diagLog.push({ at, event, ...(detail ? { detail } : {}) });
@@ -1315,7 +1324,7 @@ class XmeyePanel extends HTMLElement {
       return;
     }
     this._logTimer = setInterval(() => this._shipLog(false), 2000);
-    this._noteDiag("журнал", "запис у файл увімкнено");
+    this._noteDiag("log", "writing to file");
     this._noteLoad();
     this._render();
   }
@@ -1344,18 +1353,18 @@ class XmeyePanel extends HTMLElement {
       .getEntriesByType("resource")
       .find((entry) => entry.name.includes("xmeye-panel.js"));
     this._noteDiag(
-      "завантаження",
+      "page load",
       [
         // Named once per page, so the browser behind every later line is known
         // without repeating a user agent string on each of them.
         `${this._clientId} ${this._browserName()}`,
-        `тип ${nav ? nav.type : "?"}`,
-        nav ? `до готовності ${(nav.domContentLoadedEventEnd / 1000).toFixed(2)}с` : "",
+        `type ${nav ? nav.type : "?"}`,
+        nav ? `ready in ${(nav.domContentLoadedEventEnd / 1000).toFixed(2)}s` : "",
         // A zero transfer size with a non-zero decoded size means the browser
         // served it from its own cache rather than from Home Assistant.
         script
-          ? `панель ${script.transferSize === 0 ? "з кешу" : `${script.transferSize} Б`}`
-          : "панель не в переліку ресурсів",
+          ? `panel ${script.transferSize === 0 ? "from cache" : `${script.transferSize} B`}`
+          : "panel not among the resources",
       ]
         .filter(Boolean)
         .join(", ")
@@ -1381,7 +1390,7 @@ class XmeyePanel extends HTMLElement {
     this._bind();
 
     if (this._tab !== "overview" || !this._detail || this._live !== null) {
-      this._noteDiag("перемальовування", `вкладка ${this._tab}${why ? `, ${why}` : ""}`);
+      this._noteDiag("redraw", `tab ${this._tab}${why ? `, ${why}` : ""}`);
       this._stopWall();
       return;
     }
@@ -1395,8 +1404,8 @@ class XmeyePanel extends HTMLElement {
     // A redraw is the one thing that can put a blank tile on screen while its
     // player is mid-stream, so every one of them says what it moved and why.
     this._noteDiag(
-      "перемальовування",
-      `стіна, полотна ${adopted.length ? adopted.join(",") : "немає"}${why ? `, ${why}` : ""}`
+      "redraw",
+      `wall, canvases ${adopted.length ? adopted.join(",") : "none"}${why ? `, ${why}` : ""}`
     );
     this._startWall();
   }
@@ -1585,12 +1594,12 @@ class XmeyePanel extends HTMLElement {
     }
     const request = layout.requestFullscreen || layout.webkitRequestFullscreen;
     if (!request) {
-      this._noteDiag("стіна", "браузер не дає повний екран");
+      this._noteDiag("wall", "the browser offers no fullscreen");
       return;
     }
     // Safari resolves this rejection rather than throwing, so both are caught.
     Promise.resolve(request.call(layout)).catch((err) =>
-      this._noteDiag("стіна", `повний екран відхилено: ${err.message || err}`)
+      this._noteDiag("wall", `fullscreen refused: ${err.message || err}`)
     );
   }
 
@@ -1841,7 +1850,7 @@ class XmeyePanel extends HTMLElement {
       await this._syncWallPlayers(canvases.map((canvas) => Number(canvas.dataset.wall)));
       return;
     }
-    this._noteDiag("стіна", `старт, каналів ${canvases.length}`);
+    this._noteDiag("wall", `start, ${canvases.length} channels`);
     this._watchTiles();
     await this._openWallSocket(canvases);
   }
@@ -1884,7 +1893,7 @@ class XmeyePanel extends HTMLElement {
       const next = said.attempt
         ? `спроба ${said.attempt} через ${said.retryIn}с`
         : "відновити не вдалося";
-      this._noteDiag("стіна", `канал ${channel}: ${said.reason} ${said.detail || ""} ${next}`);
+      this._noteDiag("wall", `channel ${channel}: ${said.reason} ${said.detail || ""}`.trim());
       this._updateWallCell(channel, { error: `${what} · ${next}` });
     };
 
@@ -1908,7 +1917,7 @@ class XmeyePanel extends HTMLElement {
     const channels = [...socket.players.keys()];
     socket.start(address, this._wallWanted()).catch((err) => {
       if (this._wallReader !== socket) return;
-      this._noteDiag("стіна", `сокет впав: ${err.message || err}`);
+      this._noteDiag("wall", `socket failed: ${err.message || err}`);
       channels.forEach((index) => this._failWallTile(index, err));
     });
   }
@@ -1932,7 +1941,7 @@ class XmeyePanel extends HTMLElement {
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return url.toString();
     } catch (err) {
-      this._noteDiag("стіна", `підписана адреса недоступна: ${err.message || err}`);
+      this._noteDiag("wall", `no signed address: ${err.message || err}`);
       return null;
     }
   }
@@ -1948,7 +1957,7 @@ class XmeyePanel extends HTMLElement {
     const message = String((err && err.message) || err);
     const attempt = (this._wallRetries.get(index) || 0) + 1;
     this._wallRetries.set(index, attempt);
-    this._noteDiag("стіна", `канал ${index} впав (${attempt}): ${message}`);
+    this._noteDiag("wall", `channel ${index} failed (${attempt}): ${message}`);
 
     if (attempt > WALL_RETRIES) {
       this._updateWallCell(index, { error: message });
@@ -2047,7 +2056,7 @@ class XmeyePanel extends HTMLElement {
     const gone = running.filter((index) => !wanted.includes(index));
     const fresh = wanted.filter((index) => !this._wall.has(index));
     if (!gone.length && !fresh.length) return;
-    this._noteDiag("стіна", `узгодження: додано ${fresh}, знято ${gone}`);
+    this._noteDiag("wall", `reconciled: added ${fresh}, dropped ${gone}`);
 
     for (const index of gone) {
       if (this._wallReader) this._wallReader.remove(index);
@@ -2091,7 +2100,7 @@ class XmeyePanel extends HTMLElement {
     const wanted = this._wallWanted().filter(({ channel }) => socket.players.has(channel));
     if (!wanted.length) {
       // Nothing left to carry, and an idle connection would be held for nothing.
-      this._noteDiag("стіна", "сокет більше не потрібен");
+      this._noteDiag("wall", "socket no longer needed");
       socket.stop();
       this._wallReader = null;
       return;
@@ -3297,7 +3306,7 @@ class XmeyePanel extends HTMLElement {
     if (labKey)
       labKey.addEventListener("change", () => {
         this._lab.keyOnly = labKey.checked;
-        this._noteDiag("дослід", `лише ключові кадри: ${labKey.checked ? "так" : "ні"}`);
+        this._noteDiag("experiment", `keyframes only: ${labKey.checked ? "on" : "off"}`);
         this._remountLive();
       });
 
@@ -3305,7 +3314,7 @@ class XmeyePanel extends HTMLElement {
     if (labPaint)
       labPaint.addEventListener("change", () => {
         this._lab.noPaint = labPaint.checked;
-        this._noteDiag("дослід", `не малювати: ${labPaint.checked ? "так" : "ні"}`);
+        this._noteDiag("experiment", `do not paint: ${labPaint.checked ? "on" : "off"}`);
         this._remountLive();
       });
 

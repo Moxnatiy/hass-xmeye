@@ -1,0 +1,290 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XMeye / Xiongmai NVR",
+        "description": "Conecta con un grabador en la red local (DVRIP, puerto 34567).",
+        "data": {
+          "host": "Host",
+          "username": "Usuario",
+          "password": "Contraseña",
+          "port": "Puerto DVRIP",
+          "rtsp_port": "Puerto RTSP"
+        }
+      },
+      "reauth_confirm": {
+        "title": "La contraseña ha cambiado",
+        "description": "Introduce la contraseña actual de {host}.",
+        "data": {
+          "password": "Contraseña"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se puede acceder al grabador",
+      "invalid_auth": "Usuario o contraseña incorrectos",
+      "unknown": "Error inesperado"
+    },
+    "abort": {
+      "already_configured": "Este grabador ya está configurado",
+      "reauth_successful": "La reautenticación se ha completado"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de XMeye",
+        "data": {
+          "channels": "Canales que exponer",
+          "stream": "Flujo de la cámara",
+          "snapshot_stream": "Flujo para instantáneas",
+          "default_player": "Reproductor del panel",
+          "default_live_stream": "Flujo en directo del panel",
+          "scan_interval": "Intervalo de actualización",
+          "max_connections": "Conexiones máximas del dispositivo (TCPMaxConn)",
+          "use_rtsp": "Usar RTSP para el vídeo en directo",
+          "enable_panel": "Mostrar el panel XMeye en la barra lateral"
+        },
+        "data_description": {
+          "stream": "El flujo secundario es mucho más ligero de transcodificar; el principal es 4K.",
+          "default_player": "Con qué reproductor abre el panel. El nativo (WebCodecs) tiene la latencia más baja.",
+          "max_connections": "Se escribe en el grabador. Limita cuántos flujos van a la vez; subirlo por encima de 10 no lo respeta todo el firmware.",
+          "use_rtsp": "Desactívalo solo si RTSP está deshabilitado en el grabador."
+        }
+      }
+    }
+  },
+  "selector": {
+    "stream": {
+      "options": {
+        "main": "Flujo principal",
+        "sub": "Flujo secundario"
+      }
+    },
+    "player": {
+      "options": {
+        "native": "Nativo (WebCodecs)",
+        "hls": "HLS",
+        "mjpeg": "Instantáneas"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "uptime": {
+        "name": "Tiempo activo"
+      },
+      "total_bitrate": {
+        "name": "Tasa de bits total"
+      },
+      "channels_online": {
+        "name": "Canales en línea"
+      },
+      "recording_channels": {
+        "name": "Canales grabando"
+      },
+      "disk_used": {
+        "name": "Disco usado"
+      },
+      "disk_free": {
+        "name": "Disco libre"
+      },
+      "archive_from": {
+        "name": "Inicio del archivo"
+      },
+      "archive_to": {
+        "name": "Fin del archivo"
+      },
+      "device_time": {
+        "name": "Hora del grabador"
+      },
+      "channel_bitrate": {
+        "name": "Tasa de bits"
+      }
+    },
+    "binary_sensor": {
+      "recording": {
+        "name": "Grabando"
+      },
+      "motion_any": {
+        "name": "Movimiento"
+      },
+      "disk_problem": {
+        "name": "Problema de disco"
+      },
+      "alarm_input": {
+        "name": "Entrada de alarma"
+      },
+      "channel_motion": {
+        "name": "Movimiento"
+      },
+      "channel_recording": {
+        "name": "Grabando"
+      },
+      "channel_online": {
+        "name": "Conectado"
+      },
+      "channel_video_loss": {
+        "name": "Pérdida de vídeo"
+      },
+      "channel_blind": {
+        "name": "Cámara cegada"
+      }
+    },
+    "switch": {
+      "channel_motion_detect": {
+        "name": "Detección de movimiento"
+      },
+      "channel_blind_detect": {
+        "name": "Detección de cegado"
+      },
+      "channel_loss_detect": {
+        "name": "Detección de pérdida de vídeo"
+      }
+    },
+    "button": {
+      "reboot": {
+        "name": "Reiniciar"
+      },
+      "sync_time": {
+        "name": "Sincronizar hora"
+      }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "Control PTZ",
+      "description": "Mueve una cámara PTZ o salta a una posición predefinida.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "Con qué grabador hablar."
+        },
+        "direction": {
+          "name": "Dirección",
+          "description": "Comando de movimiento o de óptica."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Número de canal, contando desde 0."
+        },
+        "speed": {
+          "name": "Velocidad",
+          "description": "Tamaño del paso, de 1 a 8."
+        },
+        "duration": {
+          "name": "Duración",
+          "description": "Cuánto tiempo moverse, en segundos."
+        },
+        "preset": {
+          "name": "Posición predefinida",
+          "description": "Ir a esta posición en lugar de moverse."
+        }
+      }
+    },
+    "search_recordings": {
+      "name": "Buscar grabaciones",
+      "description": "Lista las grabaciones del archivo de un canal y un intervalo de tiempo.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "A qué grabador consultar."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Número de canal, contando desde 0."
+        },
+        "start": {
+          "name": "Inicio",
+          "description": "Comienzo del intervalo."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Final del intervalo."
+        },
+        "event": {
+          "name": "Evento",
+          "description": "* todo, M movimiento, A alarma, R programación, H manual."
+        }
+      }
+    },
+    "download_recording": {
+      "name": "Descargar grabación",
+      "description": "Descarga una grabación a la carpeta multimedia como flujo elemental.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "A qué grabador consultar."
+        },
+        "filename": {
+          "name": "Nombre de archivo",
+          "description": "Nombre devuelto por Buscar grabaciones."
+        },
+        "start": {
+          "name": "Inicio",
+          "description": "Hora de inicio de la grabación."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Hora de fin de la grabación."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Número de canal, contando desde 0."
+        }
+      }
+    },
+    "get_config": {
+      "name": "Leer configuración",
+      "description": "Lee una sección de configuración del grabador.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "A qué grabador consultar."
+        },
+        "section": {
+          "name": "Sección",
+          "description": "Por ejemplo NetWork.NetCommon."
+        }
+      }
+    },
+    "set_config": {
+      "name": "Escribir configuración",
+      "description": "Escribe una sección de configuración en el grabador.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "Qué grabador cambiar."
+        },
+        "section": {
+          "name": "Sección",
+          "description": "Por ejemplo General.Location."
+        },
+        "value": {
+          "name": "Valor",
+          "description": "Contenido completo de la sección."
+        }
+      }
+    },
+    "talk": {
+      "name": "Reproducir audio",
+      "description": "Envía audio G.711 al altavoz del grabador.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Grabador",
+          "description": "Con qué grabador hablar."
+        },
+        "audio_file": {
+          "name": "Archivo de audio",
+          "description": "Ruta a audio G.711 A-law en bruto."
+        }
+      }
+    }
+  },
+  "issues": {
+    "new_channels": {
+      "title": "Cámaras nuevas en {title}",
+      "description": "El grabador informa de cámaras que esta integración no está exponiendo: {names}.\n\nSe conectaron después de la configuración, así que no están entre los canales seleccionados. Abre las opciones de la integración y marca las que quieras como entidades."
+    }
+  }
+}

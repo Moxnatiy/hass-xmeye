@@ -1,0 +1,290 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XMeye / Xiongmai NVR",
+        "description": "Se connecter à un enregistreur sur le réseau local (DVRIP, port 34567).",
+        "data": {
+          "host": "Hôte",
+          "username": "Nom d'utilisateur",
+          "password": "Mot de passe",
+          "port": "Port DVRIP",
+          "rtsp_port": "Port RTSP"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Mot de passe modifié",
+        "description": "Saisissez le mot de passe actuel de {host}.",
+        "data": {
+          "password": "Mot de passe"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de joindre l'enregistreur",
+      "invalid_auth": "Nom d'utilisateur ou mot de passe incorrect",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Cet enregistreur est déjà configuré",
+      "reauth_successful": "La réauthentification a réussi"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options XMeye",
+        "data": {
+          "channels": "Canaux à exposer",
+          "stream": "Flux de la caméra",
+          "snapshot_stream": "Flux pour les instantanés",
+          "default_player": "Lecteur du panneau",
+          "default_live_stream": "Flux en direct du panneau",
+          "scan_interval": "Intervalle de mise à jour",
+          "max_connections": "Connexions maximales de l'appareil (TCPMaxConn)",
+          "use_rtsp": "Utiliser RTSP pour la vidéo en direct",
+          "enable_panel": "Afficher le panneau XMeye dans la barre latérale"
+        },
+        "data_description": {
+          "stream": "Le flux secondaire est bien plus léger à transcoder ; le flux principal est en 4K.",
+          "default_player": "Le lecteur avec lequel le panneau s'ouvre. Le natif (WebCodecs) a la latence la plus faible.",
+          "max_connections": "Écrit dans l'enregistreur. Limite le nombre de flux simultanés ; au-delà de 10, tous les firmwares ne le respectent pas.",
+          "use_rtsp": "À désactiver uniquement si RTSP est désactivé sur l'enregistreur."
+        }
+      }
+    }
+  },
+  "selector": {
+    "stream": {
+      "options": {
+        "main": "Flux principal",
+        "sub": "Flux secondaire"
+      }
+    },
+    "player": {
+      "options": {
+        "native": "Natif (WebCodecs)",
+        "hls": "HLS",
+        "mjpeg": "Instantanés"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "uptime": {
+        "name": "Temps de fonctionnement"
+      },
+      "total_bitrate": {
+        "name": "Débit total"
+      },
+      "channels_online": {
+        "name": "Canaux en ligne"
+      },
+      "recording_channels": {
+        "name": "Canaux en enregistrement"
+      },
+      "disk_used": {
+        "name": "Disque utilisé"
+      },
+      "disk_free": {
+        "name": "Disque libre"
+      },
+      "archive_from": {
+        "name": "Début de l'archive"
+      },
+      "archive_to": {
+        "name": "Fin de l'archive"
+      },
+      "device_time": {
+        "name": "Heure de l'enregistreur"
+      },
+      "channel_bitrate": {
+        "name": "Débit"
+      }
+    },
+    "binary_sensor": {
+      "recording": {
+        "name": "Enregistrement"
+      },
+      "motion_any": {
+        "name": "Mouvement"
+      },
+      "disk_problem": {
+        "name": "Problème de disque"
+      },
+      "alarm_input": {
+        "name": "Entrée d'alarme"
+      },
+      "channel_motion": {
+        "name": "Mouvement"
+      },
+      "channel_recording": {
+        "name": "Enregistrement"
+      },
+      "channel_online": {
+        "name": "Connecté"
+      },
+      "channel_video_loss": {
+        "name": "Perte vidéo"
+      },
+      "channel_blind": {
+        "name": "Caméra masquée"
+      }
+    },
+    "switch": {
+      "channel_motion_detect": {
+        "name": "Détection de mouvement"
+      },
+      "channel_blind_detect": {
+        "name": "Détection de masquage"
+      },
+      "channel_loss_detect": {
+        "name": "Détection de perte vidéo"
+      }
+    },
+    "button": {
+      "reboot": {
+        "name": "Redémarrer"
+      },
+      "sync_time": {
+        "name": "Synchroniser l'heure"
+      }
+    }
+  },
+  "services": {
+    "ptz": {
+      "name": "Commande PTZ",
+      "description": "Déplacer une caméra PTZ ou aller à un préréglage.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "À quel enregistreur s'adresser."
+        },
+        "direction": {
+          "name": "Direction",
+          "description": "Commande de déplacement ou d'objectif."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Numéro de canal, à partir de 0."
+        },
+        "speed": {
+          "name": "Vitesse",
+          "description": "Taille du pas, de 1 à 8."
+        },
+        "duration": {
+          "name": "Durée",
+          "description": "Durée du déplacement, en secondes."
+        },
+        "preset": {
+          "name": "Préréglage",
+          "description": "Aller à ce préréglage au lieu de se déplacer."
+        }
+      }
+    },
+    "search_recordings": {
+      "name": "Rechercher des enregistrements",
+      "description": "Lister les enregistrements de l'archive pour un canal et une plage horaire.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "Quel enregistreur interroger."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Numéro de canal, à partir de 0."
+        },
+        "start": {
+          "name": "Début",
+          "description": "Début de la plage."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Fin de la plage."
+        },
+        "event": {
+          "name": "Événement",
+          "description": "* tout, M mouvement, A alarme, R planification, H manuel."
+        }
+      }
+    },
+    "download_recording": {
+      "name": "Télécharger un enregistrement",
+      "description": "Télécharger un enregistrement dans le dossier média sous forme de flux élémentaire.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "Quel enregistreur interroger."
+        },
+        "filename": {
+          "name": "Nom du fichier",
+          "description": "Nom renvoyé par Rechercher des enregistrements."
+        },
+        "start": {
+          "name": "Début",
+          "description": "Heure de début de l'enregistrement."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Heure de fin de l'enregistrement."
+        },
+        "channel": {
+          "name": "Canal",
+          "description": "Numéro de canal, à partir de 0."
+        }
+      }
+    },
+    "get_config": {
+      "name": "Lire la configuration",
+      "description": "Lire une section de configuration de l'enregistreur.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "Quel enregistreur interroger."
+        },
+        "section": {
+          "name": "Section",
+          "description": "Par exemple NetWork.NetCommon."
+        }
+      }
+    },
+    "set_config": {
+      "name": "Écrire la configuration",
+      "description": "Écrire une section de configuration dans l'enregistreur.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "Quel enregistreur modifier."
+        },
+        "section": {
+          "name": "Section",
+          "description": "Par exemple General.Location."
+        },
+        "value": {
+          "name": "Valeur",
+          "description": "Contenu complet de la section."
+        }
+      }
+    },
+    "talk": {
+      "name": "Diffuser un son",
+      "description": "Envoyer de l'audio G.711 vers le haut-parleur de l'enregistreur.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Enregistreur",
+          "description": "À quel enregistreur s'adresser."
+        },
+        "audio_file": {
+          "name": "Fichier audio",
+          "description": "Chemin vers de l'audio G.711 A-law brut."
+        }
+      }
+    }
+  },
+  "issues": {
+    "new_channels": {
+      "title": "Nouvelles caméras sur {title}",
+      "description": "L'enregistreur signale des caméras que cette intégration n'expose pas : {names}.\n\nElles ont été connectées après la configuration, elles ne font donc pas partie des canaux sélectionnés. Ouvrez les options de l'intégration et cochez celles que vous voulez comme entités."
+    }
+  }
+}
