@@ -27,8 +27,8 @@ def record(kind: int, channel: int, flags: int, payload: bytes, stamp: float = 0
 
 
 def stream() -> bytes:
-    """Hello, two channels announcing, then frames from both interleaved."""
-    parts = [record(probe.MUX_HELLO, 0, 0, json.dumps({"session": "abc"}).encode())]
+    """Two channels announcing, then frames from both interleaved."""
+    parts = []
     for channel, codec in ((0, "h265"), (1, "h264")):
         info = {"channel": channel, "codec": codec, "width": 704, "height": 576, "fps": 10}
         parts.append(record(probe.MUX_INFO, channel, 0, json.dumps(info).encode()))
@@ -43,7 +43,6 @@ def test_records_are_read_back_whole() -> None:
     parser = probe.MuxParser()
     parser.feed(stream(), now=0.0)
 
-    assert parser.session_at == 0.0
     assert sorted(parser.channels) == [0, 1]
     assert parser.channels[0].info["codec"] == "h265"
     assert parser.channels[1].info["codec"] == "h264"
@@ -68,7 +67,6 @@ def test_a_record_split_across_reads_is_still_one_record(size: int) -> None:
     for at in range(0, len(data), size):
         piecemeal.feed(data[at : at + size], now=0.0)
 
-    assert piecemeal.session_at == whole.session_at
     assert sorted(piecemeal.channels) == sorted(whole.channels)
     for index, item in whole.channels.items():
         assert piecemeal.channels[index].frames == item.frames
@@ -116,5 +114,5 @@ def test_the_header_matches_the_server() -> None:
     assert '_MUX_HEADER = struct.Struct("<BHBId")' in server
     assert probe.MUX_HEADER.format == "<BHBId"
     assert probe.MUX_HEADER.size == struct.calcsize("<BHBId") == 16
-    assert "MUX_INFO, MUX_FRAME, MUX_HELLO, MUX_ERROR = 0, 1, 2, 3" in server
-    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_HELLO, probe.MUX_ERROR) == (0, 1, 2, 3)
+    assert "MUX_INFO, MUX_FRAME, MUX_ERROR = 0, 1, 3" in server
+    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_ERROR) == (0, 1, 3)

@@ -1034,12 +1034,11 @@ export class NativePlayer {
 }
 
 
-//: Record layout of the multiplexed stream: kind, channel, flags, length,
-//: timestamp. Sixteen bytes, matching _MUX_HEADER on the server.
+//: Record layout on the video socket: kind, channel, flags, length, timestamp.
+//: Sixteen bytes, matching _MUX_HEADER on the server. One record per message.
 const MUX_HEADER_BYTES = 16;
 const MUX_INFO = 0;
 const MUX_FRAME = 1;
-const MUX_HELLO = 2;
 const MUX_ERROR = 3;
 
 /**
@@ -1075,10 +1074,7 @@ class WallTransport {
 
   /** One record, whole, whatever carried it. */
   _dispatch(kind, channel, flags, stamp, payload) {
-    if (kind === MUX_HELLO) {
-      this.session = JSON.parse(new TextDecoder().decode(payload)).session;
-      this._announce(this.session);
-    } else if (kind === MUX_ERROR) {
+    if (kind === MUX_ERROR) {
       this.onChannelError(channel, JSON.parse(new TextDecoder().decode(payload)));
     }
     const player = this.players.get(channel);
@@ -1099,15 +1095,17 @@ class WallTransport {
 }
 
 /**
- * The wall over a WebSocket.
+ * The wall over a WebSocket. One connection, whatever the wall holds.
  *
- * The same records as the multiplexed response, on a connection that can be
- * written to from both ends: the channel set is changed by sending a message
- * rather than by opening a second request. One record per message, so nothing
- * has to be reassembled here.
+ * A socket can be written to from both ends, so the set of channels is changed
+ * by sending a message rather than by opening a second request, and each channel
+ * names its own stream — a tile on the main stream travels with the rest instead
+ * of costing a connection of its own.
  *
- * A browser cannot put an authorization header on a WebSocket, so the address
- * is signed by Home Assistant and handed over already usable.
+ * One record per message, so nothing has to be reassembled here.
+ *
+ * A browser cannot put an authorization header on a WebSocket, so the address is
+ * signed by Home Assistant and handed over already usable.
  */
 export class WallSocket extends WallTransport {
   constructor(sharedLog, onChannelError) {
@@ -1117,14 +1115,17 @@ export class WallSocket extends WallTransport {
     this._wanted = [];
   }
 
-  /** Open, and say what to carry as soon as it is open. */
-  start(url, channels, stream) {
-    this._wanted = [...channels];
+  /**
+   * Open, and say what to carry as soon as it is open.
+   *
+   * @param {Array<{channel: number, stream: string}>} wanted channel and stream
+   */
+  start(url, wanted) {
+    this._wanted = [...wanted];
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(url);
       socket.binaryType = "arraybuffer";
       this.socket = socket;
-      this._stream = stream;
 
       socket.addEventListener("open", () => {
         this._say("socket open", `${this._wanted.length} channels`);
@@ -1163,14 +1164,14 @@ export class WallSocket extends WallTransport {
     });
   }
 
-  /** Tell the server which channels this socket should carry. */
-  setChannels(channels) {
-    this._wanted = [...channels];
+  /** Tell the server which channels this socket should carry, and on what stream. */
+  setChannels(wanted) {
+    this._wanted = [...wanted];
     if (this.socket && this.socket.readyState === WebSocket.OPEN) this._send();
   }
 
   _send() {
-    this.socket.send(JSON.stringify({ channels: this._wanted, stream: this._stream }));
+    this.socket.send(JSON.stringify({ channels: this._wanted }));
   }
 
   stop() {
@@ -1183,88 +1184,3 @@ export class WallSocket extends WallTransport {
   }
 }
 
-/**
- * One connection carrying every tile of the wall.
- *
- * A browser allows six connections per host on HTTP/1.1, so sixteen cameras
- * opened separately leave ten of them queued forever. This reads a single
- * response and hands each record to the player that owns that channel.
- *
- * Kept as the fallback for when the socket cannot be opened at all.
- */
-export class MultiplexReader extends WallTransport {
-  constructor(sharedLog, onChannelError) {
-    super(sharedLog, onChannelError);
-    this.controller = new AbortController();
-    //: Named by the server in the first record, so the channel set of this
-    //: response can be edited without reopening it. The socket has no need of
-    //: one: it is told what to carry over itself.
-    this.session = null;
-  }
-
-  stop() {
-    this._say("shared stream stopped", `by the panel, after ${this.bytes} bytes`);
-    this._announce();
-    this.controller.abort();
-    this.players.forEach((player) => player.stop());
-    this.players.clear();
-  }
-
-  async start(url, token) {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: this.controller.signal,
-    });
-    if (!response.ok) {
-      this._announce();
-      throw new Error(`${response.status} ${await response.text()}`);
-    }
-
-    const reader = response.body.getReader();
-    let buffer = new Uint8Array(0);
-    const append = (chunk) => {
-      const merged = new Uint8Array(buffer.length + chunk.length);
-      merged.set(buffer);
-      merged.set(chunk, buffer.length);
-      buffer = merged;
-    };
-
-    this._say("shared stream open", url.replace(/\?.*/, ""));
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // The server ending the response is not an error, but it stops every
-          // tile at once, so it is never something to discover from the screen.
-          this._say("shared stream ended", `${this.bytes} bytes, by the server`);
-          break;
-        }
-        this.bytes += value.length;
-        append(value);
-
-        while (buffer.length >= MUX_HEADER_BYTES) {
-          const view = new DataView(buffer.buffer, buffer.byteOffset);
-          const kind = view.getUint8(0);
-          const channel = view.getUint16(1, true);
-          const flags = view.getUint8(3);
-          const length = view.getUint32(4, true);
-          const stamp = view.getFloat64(8, true);
-          if (buffer.length < MUX_HEADER_BYTES + length) break;
-          // Copied, because the buffer it points into is about to be advanced.
-          // The socket has no such problem: each message owns its bytes.
-          const payload = buffer.slice(MUX_HEADER_BYTES, MUX_HEADER_BYTES + length);
-          this._dispatch(kind, channel, flags, stamp, payload);
-          buffer = buffer.subarray(MUX_HEADER_BYTES + length);
-        }
-      }
-    } catch (err) {
-      this._say(
-        "shared stream broke",
-        `${err.name}: ${err.message || err}, after ${this.bytes} bytes`
-      );
-      if (err.name !== "AbortError") throw err;
-    } finally {
-      this._announce(this.session);
-    }
-  }
-}

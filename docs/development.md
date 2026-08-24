@@ -84,7 +84,7 @@ All of them read only; none change anything on the device.
 | `tools/analyse_service_blocks.py` | Collects the 127-byte service blocks and checks whether their content changes while something moves in view |
 | `tools/probe_playback_value.py` | Maps OPPlayBack `Parameter.Value`; on this firmware `Value=2` is a decodable server-side fast-scan |
 | `tools/read_capture.py` | Reads DVRIP out of a `tcpdump` pcap — the only reliable way to learn the parts of the protocol no document describes |
-| `tools/probe_multiplex.py` | Reads the panel's own video endpoints without a browser and reports, per channel, when the stream was announced and when its first keyframe arrived — the number that says whether a late tile is the server's doing or the client's. `--split` runs the same measurement over one connection per channel as a control |
+| `tools/probe_multiplex.py` | Opens the panel's own video socket without a browser and reports, per channel, when the stream was announced and when its first keyframe arrived — the number that says whether a late tile is the server's doing or the client's. A channel may name its stream, as `0:main` |
 | `tools/sync_lib.py` | Syncs the vendored library copy |
 | `tools/ha_restart.sh` | Restarts a development Home Assistant, forcing the port free instead of waiting out the database shutdown |
 
@@ -145,10 +145,10 @@ HA_TOKEN=... python tools/probe_multiplex.py --channels 0,1,2 --seconds 20
 
 Between it and the recorder-side logs, a staggered wall can be pinned down
 without guessing. `homeassistant.components.xmeye` at debug level reports when a
-multiplexed session gains or loses a channel and how long each channel took to
-send something showable; the panel's own log records when each tile first
-painted. If the three agree, the recorder is pacing the wall; if they disagree,
-the disagreement names the layer.
+video session gains or loses a channel and how long each channel took to send
+something showable; the panel's own log records when each tile first painted. If
+the three agree, the recorder is pacing the wall; if they disagree, the
+disagreement names the layer.
 
 The rest take the device from the environment:
 

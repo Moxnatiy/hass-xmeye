@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
-"""Watch what the integration's video endpoints actually send, without a browser.
+"""Watch what the integration's video socket actually sends, without a browser.
 
     HA_TOKEN=... python tools/probe_multiplex.py --channels 0,1,2 --seconds 20
-    HA_TOKEN=... python tools/probe_multiplex.py --channels 0,1,2 --split
+    HA_TOKEN=... python tools/probe_multiplex.py --channels 0:main,1,2
 
 A tile that comes up late, or blinks and comes back, has two possible causes and
 they look identical on screen: either the server delivered it that way, or the
-browser did. This reads the same HTTP endpoints the panel reads and reports the
-timing of every record, so the server's half can be ruled in or out on its own.
+browser did. This opens the same socket the panel opens and reports the timing of
+every record, so the server's half can be ruled in or out on its own.
 
-``--split`` opens the old one-connection-per-channel endpoints instead of the
-shared one, which separates "the multiplexer staggers channels" from "this
-recorder starts channels slowly" — the same control-run discipline the archive
-speed probe needed.
+A channel may name its own stream — ``0:main`` — because the socket carries a
+stream type per channel rather than one for the whole connection.
 
-Nothing here writes to the recorder or to Home Assistant. Both endpoints are
-reads.
+Nothing here writes to the recorder or to Home Assistant. The socket is a read.
 
 The token is a Home Assistant long-lived access token (Profile -> Security). It
 is read from ``HA_TOKEN`` or from ``.local/ha-token``, which is gitignored, and
@@ -34,10 +31,7 @@ import time
 
 #: Mirrors _MUX_HEADER in custom_components/xmeye/http.py.
 MUX_HEADER = struct.Struct("<BHBId")
-MUX_INFO, MUX_FRAME, MUX_HELLO, MUX_ERROR = 0, 1, 2, 3
-
-#: Mirrors _FRAME_HEADER, the single-channel format.
-FRAME_HEADER = struct.Struct("<BId")
+MUX_INFO, MUX_FRAME, MUX_ERROR = 0, 1, 3
 
 #: A gap longer than this is worth naming: a camera at 10 fps still owes a frame
 #: every 100 ms, so a second of silence is a stall rather than jitter.
@@ -137,7 +131,6 @@ class MuxParser:
     def __init__(self) -> None:
         self.buffer = bytearray()
         self.channels: dict[int, ChannelReport] = {}
-        self.session_at: float | None = None
 
     def feed(self, chunk: bytes, now: float) -> None:
         self.buffer += chunk
@@ -148,9 +141,6 @@ class MuxParser:
             payload = bytes(self.buffer[MUX_HEADER.size : MUX_HEADER.size + length])
             del self.buffer[: MUX_HEADER.size + length]
 
-            if kind == MUX_HELLO:
-                self.session_at = now
-                continue
             item = self.channels.setdefault(channel, ChannelReport(channel))
             if kind == MUX_INFO:
                 item.note_info(now, json.loads(payload))
@@ -162,56 +152,59 @@ class MuxParser:
                 item.troubles.append((now, f"{said['reason']}{detail}"))
 
 
-async def read_mux(session, url: str, seconds: float) -> dict[int, ChannelReport]:
+async def read_socket(session, url: str, wanted: list[dict], seconds: float):
+    """Open the video socket, ask for the channels, and time what comes back."""
+    import aiohttp
+
     parser = MuxParser()
     started = time.monotonic()
-    announced = False
 
-    async with session.get(url) as response:
-        response.raise_for_status()
-        async for chunk in response.content.iter_any():
-            parser.feed(chunk, time.monotonic() - started)
-            if parser.session_at is not None and not announced:
-                announced = True
-                print(f"  session opened at {parser.session_at:.2f}s")
+    async with session.ws_connect(url, heartbeat=30, max_msg_size=0) as socket:
+        await socket.send_json({"channels": wanted})
+        print(f"  socket open, asked for {len(wanted)} channels")
+        async for message in socket:
+            if message.type is aiohttp.WSMsgType.BINARY:
+                parser.feed(message.data, time.monotonic() - started)
             if time.monotonic() - started >= seconds:
                 break
     return parser.channels
 
 
-async def read_single(session, url: str, channel: int, seconds: float) -> ChannelReport:
-    """The one-channel endpoint: a 4-byte JSON header, then frames."""
-    item = ChannelReport(channel)
-    started = time.monotonic()
-    buffer = bytearray()
-    header_read = False
+async def signed_socket_url(base: str, token: str, entry: str) -> str:
+    """Ask Home Assistant to sign a video-socket address, over its own API.
 
-    async with session.get(url) as response:
-        response.raise_for_status()
-        async for chunk in response.content.iter_any():
-            buffer += chunk
-            while True:
-                now = time.monotonic() - started
-                if not header_read:
-                    if len(buffer) < 4:
-                        break
-                    length = int.from_bytes(buffer[:4], "little")
-                    if len(buffer) < 4 + length:
-                        break
-                    item.note_info(now, json.loads(bytes(buffer[4 : 4 + length])))
-                    del buffer[: 4 + length]
-                    header_read = True
-                    continue
-                if len(buffer) < FRAME_HEADER.size:
-                    break
-                flags, length, _stampms = FRAME_HEADER.unpack_from(buffer)
-                if len(buffer) < FRAME_HEADER.size + length:
-                    break
-                del buffer[: FRAME_HEADER.size + length]
-                item.note_frame(now, bool(flags & 1), length)
-            if time.monotonic() - started >= seconds:
-                break
-    return item
+    The same two steps the panel takes: authenticate on the Home Assistant
+    WebSocket API, then ask this integration for a signed path — a browser
+    cannot put a header on a WebSocket, and neither can this.
+    """
+    import aiohttp
+
+    ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
+    async with (
+        aiohttp.ClientSession() as session,
+        session.ws_connect(f"{ws_base}/api/websocket") as socket,
+    ):
+        await socket.receive_json()  # auth_required
+        await socket.send_json({"type": "auth", "access_token": token})
+        hello = await socket.receive_json()
+        if hello.get("type") != "auth_ok":
+            sys.exit("Home Assistant refused the token.")
+        await socket.send_json({"id": 1, "type": "xmeye/stream_url", "entry_id": entry})
+        reply = await socket.receive_json()
+        if not reply.get("success"):
+            sys.exit(f"Could not get a signed address: {reply}")
+        return f"{ws_base}{reply['result']['path']}"
+
+
+def parse_wanted(raw: str) -> list[dict]:
+    """``0:main,1,2`` — a channel list where a channel may name its stream."""
+    wanted = []
+    for part in raw.split(","):
+        if not part:
+            continue
+        channel, _, stream = part.partition(":")
+        wanted.append({"channel": int(channel), "stream": stream or "sub"})
+    return wanted
 
 
 def find_token() -> str:
@@ -251,51 +244,25 @@ async def main() -> None:
     import aiohttp
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channels", default="0,1,2", help="comma-separated, e.g. 0,1,2")
-    parser.add_argument("--seconds", type=float, default=20.0)
-    parser.add_argument("--stream", default="sub", choices=["sub", "main"])
     parser.add_argument(
-        "--split",
-        action="store_true",
-        help="one connection per channel, the way the wall did before 0.4.0",
+        "--channels", default="0,1,2", help="e.g. 0,1,2 or 0:main,1,2"
     )
+    parser.add_argument("--seconds", type=float, default=20.0)
     args = parser.parse_args()
 
     base = os.environ.get("HA_URL", "http://localhost:8123").rstrip("/")
-    channels = [int(part) for part in args.channels.split(",") if part]
-    headers = {"Authorization": f"Bearer {find_token()}"}
+    wanted = parse_wanted(args.channels)
+    token = find_token()
+    headers = {"Authorization": f"Bearer {token}"}
 
     async with aiohttp.ClientSession(
         headers=headers, timeout=aiohttp.ClientTimeout(total=args.seconds + 30)
     ) as session:
         entry = await find_entry(session, base)
-
-        if args.split:
-            print(f"opening {len(channels)} separate connections")
-            started = time.monotonic()
-            reports = await asyncio.gather(
-                *[
-                    read_single(
-                        session,
-                        f"{base}/api/xmeye/native/{entry}/{c}?stream={args.stream}",
-                        c,
-                        args.seconds,
-                    )
-                    for c in channels
-                ]
-            )
-            report(
-                {r.channel: r for r in reports},
-                time.monotonic() - started,
-                "one connection per channel",
-            )
-            return
-
-        params = f"channels={','.join(str(c) for c in channels)}&stream={args.stream}"
-        print(f"opening one connection for {len(channels)} channels")
+        url = await signed_socket_url(base, token, entry)
         started = time.monotonic()
-        found = await read_mux(session, f"{base}/api/xmeye/native/{entry}?{params}", args.seconds)
-        report(found, time.monotonic() - started, "one shared connection")
+        found = await read_socket(session, url, wanted, args.seconds)
+        report(found, time.monotonic() - started, "one socket")
 
 
 if __name__ == "__main__":

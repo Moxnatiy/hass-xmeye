@@ -40,18 +40,6 @@ const LAYOUTS = [
 const WALL_RETRIES = 5;
 const WALL_RETRY_DELAY = 5000;
 
-//: From this many sharable tiles the wall uses one connection. A browser allows
-//: six per host on HTTP/1.1 and the rest of Home Assistant needs some of those,
-//: so sharing starts as soon as there is anything to share.
-//:
-//: It was three while a separate connection per tile was the better failure —
-//: one stalling camera then slowed only itself. That is no longer the trade:
-//: the shared path gives every channel a deadline, four redials and a reason
-//: printed under the tile, and a channel that goes quiet on its own connection
-//: gets none of that. Only a single tile is left on its own now, since there is
-//: nothing for it to share with.
-const MUX_FROM = 2;
-
 //: Why a shared-connection channel is showing nothing. The server sends the
 //: reason as a word; the sentence belongs here, where the language does.
 //: How long the tile watcher samples the screen for, once the log is on. Long
@@ -508,10 +496,9 @@ class XmeyePanel extends HTMLElement {
     this._wallRetries = new Map();
     //: Set when the whole wall shares one connection.
     this._wallReader = null;
-    //: Set once a video socket has failed to open, so the fallback is not
-    //: rediscovered on every redraw. Cleared by a reload, which is the right
-    //: granularity: whatever broke the upgrade is a property of the network.
-    this._socketOff = false;
+    //: The socket behind the single-camera view, when the native player is the
+    //: one showing it.
+    this._nativeSocket = null;
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     this._wallPage = 0;
@@ -894,7 +881,8 @@ class XmeyePanel extends HTMLElement {
       canvas.className = "live";
       holder.replaceChildren(canvas);
 
-      const { NativePlayer: Player } = await nativeModule;
+      const { NativePlayer: Player, WallSocket } = await nativeModule;
+      const channel = this._live;
       const player = new Player(
         canvas,
         (stats) => {
@@ -906,13 +894,30 @@ class XmeyePanel extends HTMLElement {
         { ...this._lab }
       );
       this._native = player;
-      const url =
-        `/api/xmeye/native/${this._entryId}/${this._live}` +
-        `?stream=${this._liveStream}`;
-      player.start(url, await this._token()).catch((err) => {
-        this._osd = { player: "native", error: String(err.message || err) };
+
+      // One camera over the same socket the wall uses, carrying one channel.
+      // Nothing about a single stream needs a second kind of transport, and one
+      // fewer of them is one fewer to keep working.
+      const address = await this._socketAddress();
+      if (!address) {
+        this._osd = { player: "native", error: "немає адреси для потоку" };
+        this._updateOsd();
+        return;
+      }
+      const socket = new WallSocket(this._playerLog, (_channel, said) => {
+        if (this._nativeSocket !== socket) return;
+        this._osd = { player: "native", error: WALL_TROUBLE[said.reason] || said.reason };
         this._updateOsd();
       });
+      socket.add(channel, player);
+      this._nativeSocket = socket;
+      socket
+        .start(address, [{ channel, stream: this._liveStream }])
+        .catch((err) => {
+          if (this._nativeSocket !== socket) return;
+          this._osd = { player: "native", error: String(err.message || err) };
+          this._updateOsd();
+        });
       return;
     }
 
@@ -1003,6 +1008,13 @@ class XmeyePanel extends HTMLElement {
   }
 
   _teardownPlayer() {
+    // The socket first: it owns the connection, and stopping it stops the player
+    // it carries. Leaving it open would hold a recorder connection for a camera
+    // nobody is looking at any more.
+    if (this._nativeSocket) {
+      this._nativeSocket.stop();
+      this._nativeSocket = null;
+    }
     if (this._native) {
       this._native.stop();
       this._native = null;
@@ -1771,25 +1783,7 @@ class XmeyePanel extends HTMLElement {
     }
     this._noteDiag("стіна", `старт, каналів ${canvases.length}`);
     this._watchTiles();
-
-    // Above the browser's per-host connection limit, one stream per tile means
-    // the ones past the sixth never start. Sharing a single response costs one
-    // connection for the whole wall.
-    //
-    // The shared response carries one stream type for all of it, so a tile
-    // switched to the main stream cannot travel in it and takes its own
-    // connection. Only that tile, though: the rest still share. Making the whole
-    // wall fall back because one camera wants full resolution put sixteen
-    // cameras back on sixteen connections to satisfy one.
-    const own = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) === "main");
-    const shared = canvases.filter((c) => this._wallStream(Number(c.dataset.wall)) !== "main");
-
-    if (shared.length >= MUX_FROM) {
-      await this._startWallMultiplexed(shared);
-    } else {
-      for (const canvas of shared) await this._startWallTile(canvas);
-    }
-    for (const canvas of own) await this._startWallTile(canvas);
+    await this._openWallSocket(canvases);
   }
 
   /** A wall player for one channel, wired to that tile's cell and log. */
@@ -1805,21 +1799,27 @@ class XmeyePanel extends HTMLElement {
     return player;
   }
 
-  /** Whether the shared connection is the one carrying this channel. */
-  _isShared(index) {
-    return Boolean(this._wallReader && this._wallReader.players.has(index));
+  /** What the socket should be carrying: every tile, on the stream it wants. */
+  _wallWanted() {
+    return [...this._wall.keys()].map((index) => ({
+      channel: index,
+      stream: this._wallStream(index),
+    }));
   }
 
   /**
-   * Every tile from one connection.
+   * Every tile from one socket.
    *
-   * The reader owns the fetch and hands each record to the player that owns
-   * that channel; the players do the same decoding and drawing as ever.
+   * The socket owns the connection and hands each record to the player that owns
+   * that channel; the players do the same decoding and drawing as ever. Each
+   * channel names its own stream, so a tile on the main stream travels with the
+   * rest rather than costing a connection of its own.
    */
-  async _startWallMultiplexed(wanted) {
-    const { MultiplexReader, WallSocket } = await nativeModule;
-    const trouble = (reader) => (channel, said) => {
-      if (this._wallReader !== reader) return;
+  async _openWallSocket(canvases) {
+    const { WallSocket } = await nativeModule;
+    const socket = new WallSocket(this._playerLog, null);
+    socket.onChannelError = (channel, said) => {
+      if (this._wallReader !== socket) return;
       const what = WALL_TROUBLE[said.reason] || said.reason;
       const next = said.attempt
         ? `спроба ${said.attempt} через ${said.retryIn}с`
@@ -1828,52 +1828,27 @@ class XmeyePanel extends HTMLElement {
       this._updateWallCell(channel, { error: `${what} · ${next}` });
     };
 
-    // The socket is the way in: one connection for the wall, and the channel set
-    // changed by writing to it rather than by opening a second request. The
-    // streamed response stays as the fallback for anything that will not carry a
-    // WebSocket — a proxy that strips the upgrade, most often.
     const address = await this._socketAddress();
-    let reader;
-    if (address) {
-      reader = new WallSocket(this._playerLog, null);
-      reader.onChannelError = trouble(reader);
-    } else {
-      reader = new MultiplexReader(this._playerLog, null);
-      reader.onChannelError = trouble(reader);
+    if (!address) {
+      canvases.forEach((canvas) =>
+        this._updateWallCell(Number(canvas.dataset.wall), { error: "немає адреси для потоку" })
+      );
+      return;
     }
-    this._wallReader = reader;
+    this._wallReader = socket;
 
-    const channels = [];
     // Looked up again after the await, not carried across it: a redraw in
     // between would have left every one of those nodes out of the document.
-    for (const stale of wanted) {
+    for (const stale of canvases) {
       const index = Number(stale.dataset.wall);
       const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`) || stale;
-      reader.add(index, await this._makeWallPlayer(index, canvas));
-      channels.push(index);
+      socket.add(index, await this._makeWallPlayer(index, canvas));
     }
 
-    const opened = address
-      ? reader.start(address, channels, "sub")
-      : reader.start(
-          `/api/xmeye/native/${this._entryId}?${new URLSearchParams({
-            channels: channels.join(","),
-            stream: "sub",
-          })}`,
-          await this._token()
-        );
-    opened.catch(async (err) => {
-      if (this._wallReader !== reader) return;
-      this._noteDiag("стіна", `спільне з'єднання впало: ${err.message || err}`);
-      // A socket that never opened is a transport problem, not a camera problem,
-      // and retrying the same transport would only repeat it.
-      if (address && !reader.bytes) {
-        this._noteDiag("стіна", "сокет не піднявся, переходжу на потокову відповідь");
-        this._stopWall();
-        this._socketOff = true;
-        await this._startWall();
-        return;
-      }
+    const channels = [...socket.players.keys()];
+    socket.start(address, this._wallWanted()).catch((err) => {
+      if (this._wallReader !== socket) return;
+      this._noteDiag("стіна", `сокет впав: ${err.message || err}`);
       channels.forEach((index) => this._failWallTile(index, err));
     });
   }
@@ -1887,7 +1862,7 @@ class XmeyePanel extends HTMLElement {
    * wall may be opened hours after the page was.
    */
   async _socketAddress() {
-    if (this._socketOff || typeof WebSocket === "undefined") return null;
+    if (typeof WebSocket === "undefined") return null;
     try {
       const { path } = await this._ws({
         type: "xmeye/stream_url",
@@ -1900,18 +1875,6 @@ class XmeyePanel extends HTMLElement {
       this._noteDiag("стіна", `підписана адреса недоступна: ${err.message || err}`);
       return null;
     }
-  }
-
-  /** Bring up one tile on the stream chosen for its channel. */
-  async _startWallTile(canvas) {
-    const index = Number(canvas.dataset.wall);
-    const player = await this._makeWallPlayer(index, canvas);
-    player
-      .start(
-        `/api/xmeye/native/${this._entryId}/${index}?stream=${this._wallStream(index)}`,
-        await this._token()
-      )
-      .catch((err) => this._failWallTile(index, err));
   }
 
   /**
@@ -1940,32 +1903,24 @@ class XmeyePanel extends HTMLElement {
     }, delay);
   }
 
+  /**
+   * Bring one tile back, on the connection the whole wall uses.
+   *
+   * Every tile lives on the socket, so this is a removal and an addition in the
+   * channel list rather than a connection of its own being dialled.
+   */
   async _restartWallTile(index) {
-    const wasShared = this._isShared(index);
-    const running = this._wall.get(index);
-    if (running) {
-      // Leave the way it arrived, and before anything is awaited: the old
-      // connection must be gone before the new one asks for the same channel.
-      if (wasShared) this._wallReader.remove(index);
-      else running.stop();
-      this._wall.delete(index);
-    }
-    const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-    if (!canvas) {
-      if (wasShared) await this._sendWallChannels();
-      return;
-    }
-    this._updateWallCell(index, { connecting: true });
+    if (this._wallReader) this._wallReader.remove(index);
+    this._wall.delete(index);
 
-    // Switching a tile to the main stream takes it out of the shared response,
-    // and switching it back puts it in. Either way only this channel moves.
-    if (this._wallReader && this._wallStream(index) !== "main") {
-      this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
+    const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
+    if (!canvas || !this._wallReader) {
       await this._sendWallChannels();
       return;
     }
-    await this._startWallTile(canvas);
-    if (wasShared) await this._sendWallChannels();
+    this._updateWallCell(index, { connecting: true });
+    this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
+    await this._sendWallChannels();
   }
 
   /**
@@ -2024,8 +1979,8 @@ class XmeyePanel extends HTMLElement {
   /**
    * Bring the running players in line with the tiles now on the wall.
    *
-   * On the shared connection this is a message rather than a reconnection: the
-   * server adds or drops that camera and keeps feeding the rest.
+   * This is a message rather than a reconnection: the server adds or drops that
+   * camera on the connection everything else is still using.
    */
   async _syncWallPlayers(wanted) {
     const running = [...this._wall.keys()];
@@ -2034,14 +1989,9 @@ class XmeyePanel extends HTMLElement {
     if (!gone.length && !fresh.length) return;
     this._noteDiag("стіна", `узгодження: додано ${fresh}, знято ${gone}`);
 
-    // A channel leaves the way it arrived: out of the shared response, or by
-    // closing its own connection.
-    let sharedChanged = false;
     for (const index of gone) {
-      if (this._isShared(index)) {
-        this._wallReader.remove(index);
-        sharedChanged = true;
-      } else {
+      if (this._wallReader) this._wallReader.remove(index);
+      else {
         const player = this._wall.get(index);
         if (player) player.stop();
       }
@@ -2049,91 +1999,44 @@ class XmeyePanel extends HTMLElement {
       this._wallRetries.delete(index);
     }
 
-    // The shared response carries the sub stream only, so a tile on the main
-    // stream always gets its own connection whatever the rest of the wall does.
-    const freshShared = fresh.filter((index) => this._wallStream(index) !== "main");
-    const freshOwn = fresh.filter((index) => this._wallStream(index) === "main");
-
-    if (this._wallReader) {
-      for (const index of freshShared) {
-        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-        if (!canvas) continue;
-        this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
-        sharedChanged = true;
-      }
-    } else if (freshShared.length && this._sharedCount() + freshShared.length >= MUX_FROM) {
-      // Growing past the point where separate connections stop fitting is the
-      // one case that has to start over, because the tiles change transport. The
-      // players are cleared first: _startWall reconciles a wall that still has
-      // any, and reconciling is what led here.
+    // A wall with no socket at all is one that never opened; bring it up whole
+    // rather than adding channels to nothing.
+    if (!this._wallReader) {
       this._stopWall();
       await this._startWall();
       return;
-    } else {
-      for (const index of freshShared) {
-        const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-        if (canvas) await this._startWallTile(canvas);
-      }
     }
 
-    for (const index of freshOwn) {
+    for (const index of fresh) {
       const canvas = this.shadowRoot.querySelector(`canvas[data-wall="${index}"]`);
-      if (canvas) await this._startWallTile(canvas);
+      if (!canvas) continue;
+      this._wallReader.add(index, await this._makeWallPlayer(index, canvas));
     }
-    if (sharedChanged) await this._sendWallChannels();
-  }
-
-  /** How many running tiles are on the sub stream, and so could share. */
-  _sharedCount() {
-    return [...this._wall.keys()].filter((index) => this._wallStream(index) !== "main").length;
+    await this._sendWallChannels();
   }
 
   /**
-   * Tell the running response which channels it should carry.
+   * Tell the socket which channels to carry, and on which streams.
    *
-   * A browser cannot write into a request whose response it is still reading,
-   * so the change goes out on its own short request naming the session — the
-   * same split the vendor app uses over its own socket pair.
+   * A message on the connection it is about — which is the whole reason the wall
+   * moved to a socket. Before, this was a second request naming a session,
+   * because a browser cannot write into a request whose response it is reading.
    */
   async _sendWallChannels() {
-    const reader = this._wallReader;
-    if (!reader) return;
-    await reader.ready;
-    if (this._wallReader !== reader) return;
+    const socket = this._wallReader;
+    if (!socket) return;
+    await socket.ready;
+    if (this._wallReader !== socket) return;
 
-    // Only what this connection carries — not the whole wall, which may also
-    // hold tiles on their own connections.
-    const channels = [...reader.players.keys()];
-    if (!channels.length) {
-      // Nothing left to carry. An empty channel set is not a thing either end
-      // accepts, and an idle connection would be held for nothing.
-      this._noteDiag("стіна", "спільне з'єднання більше не потрібне");
-      reader.stop();
+    const wanted = this._wallWanted().filter(({ channel }) => socket.players.has(channel));
+    if (!wanted.length) {
+      // Nothing left to carry, and an idle connection would be held for nothing.
+      this._noteDiag("стіна", "сокет більше не потрібен");
+      socket.stop();
       this._wallReader = null;
       return;
     }
-    if (reader.setChannels) {
-      // Over a socket the change is a message on the connection it is about.
-      reader.setChannels(channels);
-      return;
-    }
-    if (!reader.session) return;
-    const response = await fetch(`/api/xmeye/native/${this._entryId}/mux`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${await this._token()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ session: reader.session, channels }),
-    });
-    if (response.ok || this._wallReader !== reader) return;
-    // The session is gone — the response ended under us. A fresh one is the only
-    // way back, and that is the case a restart is actually for. Clearing first
-    // matters for the same reason as above: _startWall reconciles a wall that
-    // still has players, and reconciling is what brought us here.
-    this._noteDiag("стіна", "сесія втрачена, перепідключення");
-    this._stopWall();
-    await this._startWall();
+    socket.setChannels(wanted);
   }
 
   _stopWall() {

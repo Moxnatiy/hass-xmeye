@@ -74,21 +74,25 @@ several 4K tiles at once overload both the browser and the recorder, which has
 about ten connections to give in total. Changing one camera's stream restarts
 that tile alone rather than the whole wall.
 
-From two tiles the wall stops opening a stream per camera and shares a single
-response instead. A browser allows six connections per host on HTTP/1.1 — the
-number is a constant in Chromium's socket pool — and the rest of Home Assistant
-needs some of those, so a wall of sixteen cameras opened separately leaves most
-of them queued forever, retrying and never starting. One response carries every
-tile, with the channel named in each record, and the players decode exactly as
-before.
+The whole wall travels on one WebSocket, whatever it holds. A browser allows six
+connections per host on HTTP/1.1 — the number is a constant in Chromium's socket
+pool — and the rest of Home Assistant needs some of those, so a wall of sixteen
+cameras opened separately leaves most of them queued forever, retrying and never
+starting. Sockets are counted against a limit of 255 instead, and one carries
+every tile: the channel is named in each record, and the players decode exactly
+as before.
 
-That connection is a WebSocket. The records are the same, but a socket can be
-written to from both ends, so changing which channels the wall carries is a
-message on the connection it is about rather than a second request — a browser
-cannot write into a request whose response it is still reading, which is why one
-was needed. A socket also preserves message boundaries, so each record arrives
-whole and nothing is reassembled. Browsers count sockets against a limit of 255
-rather than 6.
+A socket can be written to from both ends, which is why it is a socket. Changing
+which channels the wall carries is a message on the connection it is about,
+where a streamed response needed a second request to say the same thing — a
+browser cannot write into a request whose response it is still reading. Message
+boundaries are preserved too, so each record arrives whole and nothing is
+reassembled.
+
+Each channel names its own stream in that message, so a tile switched to the
+main stream travels with the rest rather than costing a connection of its own,
+and switching it back is the same message again. The server drops that one
+channel's task and dials it on the other stream; the other tiles never notice.
 
 A browser cannot put an authorization header on a WebSocket, so the address
 carries the permission instead: Home Assistant signs the path against the
@@ -96,17 +100,12 @@ caller's own refresh token, and it expires in minutes. The channel list is not
 part of the address — signing covers the query too, and the socket can simply be
 told what to carry once it is open.
 
-The streamed HTTP response remains as the fallback, for anything that will not
-carry a WebSocket; a socket that never opens switches to it once rather than
-rediscovering the problem on every redraw.
+The single-camera view uses the same socket carrying one channel. Nothing about
+one stream needs a second kind of transport, and one fewer of them is one fewer
+to keep working.
 
 The trade is a shared pipe: if the browser falls behind, every tile slows
 together rather than one at a time. For a wall that is the better failure.
-
-The shared response carries one stream type, so a tile switched to the main
-stream travels on its own connection — that tile only. The rest keep sharing,
-and switching a tile either way moves just that channel: into the shared
-response, or out of it onto a connection of its own.
 
 Editing the wall does not disturb the cameras on it. Switching a channel off,
 dragging a tile, turning the page or changing the layout used to stop every
@@ -115,9 +114,8 @@ sixteen reconnected because a sensor reading changed. Now the cells are rebuilt
 as markup and the canvases of the channels that stay are moved into them: a
 canvas keeps its contents and its drawing context across a move, so its player
 never learns anything happened. Only the difference is started or stopped, and
-on the shared connection that difference is a short request naming the session
-rather than a reconnection — the recorder adds or drops that one camera and
-keeps feeding the rest.
+that difference is a message on the socket rather than a reconnection — the
+server adds or drops that one camera and keeps feeding the rest.
 
 A decoder that fails no longer blanks the tile. Writing a canvas dimension
 clears it even when the value is unchanged, so every restart used to wipe a
