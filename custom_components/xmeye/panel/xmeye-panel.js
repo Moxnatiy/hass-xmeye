@@ -15,6 +15,21 @@
 const VERSION = new URL(import.meta.url).searchParams.get("v") || "";
 const nativeModule = import(`./native-player.js${VERSION ? `?v=${VERSION}` : ""}`);
 
+//: Loaded eagerly, unlike the player: the very first render needs it, and a
+//: panel that flashes English before settling into the user's language is worse
+//: than one that waits a few milliseconds for a file it fetched alongside this.
+const i18nModule = import(`./i18n.js${VERSION ? `?v=${VERSION}` : ""}`);
+//: Replaced by the real translator as soon as that module lands. Until then the
+//: source text stands, which is English and correct.
+let t = (text, values) =>
+  values ? text.replace(/\{(\w+)\}/g, (whole, name) =>
+    Object.hasOwn(values, name) ? String(values[name]) : whole) : text;
+let useLanguage = () => {};
+i18nModule.then((module) => {
+  t = module.t;
+  useLanguage = module.useLanguage;
+});
+
 let NativePlayer = null;
 let nativeSupported = typeof VideoDecoder !== "undefined";
 nativeModule.then((module) => {
@@ -84,15 +99,10 @@ const fullscreenIcon = () =>
   `<path d="M6 1.6H1.6V6"/><path d="M10 1.6h4.4V6"/>` +
   `<path d="M6 14.4H1.6V10"/><path d="M10 14.4h4.4V10"/></svg>`;
 
-//: "1 канал", "4 канали", "6 каналів" — the toolbar says it in a tooltip, and
-//: getting it wrong is the kind of thing a viewer notices every single time.
-const channelWord = (count) => {
-  const tail = count % 10;
-  const teen = count % 100 >= 11 && count % 100 <= 14;
-  if (!teen && tail === 1) return "канал";
-  if (!teen && tail >= 2 && tail <= 4) return "канали";
-  return "каналів";
-};
+//: The tooltip on a layout button. Plural rules differ per language and this
+//: one sentence is not worth a plural engine, so each language phrases the
+//: whole line and the number goes in wherever its grammar wants it.
+const channelCount = (count) => t("{count} channels", { count });
 
 //: How hard to try to bring a wall tile back before leaving the error on
 //: screen, and the base delay between attempts.
@@ -106,24 +116,26 @@ const WALL_RETRY_DELAY = 5000;
 //: does not follow the page around all evening.
 const TILE_WATCH = 30000;
 
+//: Translated where they are used rather than here: this table is built once,
+//: at load, and the language may not be known yet.
 const WALL_TROUBLE = {
-  silent: "камера не передає відео",
-  ended: "реєстратор обірвав потік",
-  failed: "збій зв'язку з реєстратором",
+  silent: "the camera sends no video",
+  ended: "the recorder cut the stream",
+  failed: "connection to the recorder failed",
 };
 
 //: Stream choices offered per tile on the wall.
 const WALL_STREAMS = [
-  ["sub", "Дод."],
-  ["main", "Осн."],
+  ["sub", "Sub"],
+  ["main", "Main"],
 ];
 
 //: Playback methods. Native gives the lowest latency, HLS the best
 //: compatibility, and the snapshot stream always works but is never smooth.
 const PLAYERS = [
-  ["native", "Нативний (WebCodecs)"],
+  ["native", "Native (WebCodecs)"],
   ["hls", "HLS"],
-  ["mjpeg", "Стоп-кадри"],
+  ["mjpeg", "Snapshots"],
 ];
 
 //: Where a report goes when the user chooses to file it. Nothing is sent
@@ -466,7 +478,7 @@ const EVENT_COLORS = {
 
 const fmtBytes = (n) => {
   if (!n) return "—";
-  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  const units = [t("B"), t("KB"), t("MB"), t("GB"), t("TB")];
   let i = 0;
   while (n >= 1024 && i < units.length - 1) {
     n /= 1024;
@@ -480,16 +492,16 @@ const fmtDuration = (seconds) => {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d) return `${d} дн ${h} год`;
-  if (h) return `${h} год ${m} хв`;
-  return `${m} хв`;
+  if (d) return t("{days}d {hours}h", { days: d, hours: h });
+  if (h) return t("{hours}h {minutes}m", { hours: h, minutes: m });
+  return t("{minutes}m", { minutes: m });
 };
 
 //: Fixed-width bitrate: without it the line under the video twitches every
 //: second as the number moves between three and four digits.
 const fmtBitrate = (kbps) => {
   if (!kbps && kbps !== 0) return "—";
-  return `${(kbps / 1000).toFixed(3).padStart(7, " ")} Мбіт/с`;
+  return t("{value} Mbit/s", { value: (kbps / 1000).toFixed(3).padStart(7, " ") });
 };
 
 //: The height alone, the way cameras, players and everyone talking about video
@@ -605,6 +617,15 @@ class XmeyePanel extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    // Home Assistant knows what the user reads; a language change there takes
+    // effect on the next redraw rather than needing the page reloaded.
+    if (hass && hass.language !== this._language) {
+      this._language = hass.language;
+      i18nModule.then((module) => {
+        module.useLanguage(this._language);
+        if (this._detail) this._render();
+      });
+    }
     if (first) this._bootstrap();
     else if (this._detail) this._renderIfIdle();
   }
@@ -703,7 +724,7 @@ class XmeyePanel extends HTMLElement {
       const { devices } = await this._ws({ type: "xmeye/devices" });
       this._devices = devices;
       if (!devices.length) {
-        this._error = "Жодного реєстратора не налаштовано.";
+        this._error = t("No recorder is configured.");
         this._loading = false;
         return this._render();
       }
@@ -777,11 +798,11 @@ class XmeyePanel extends HTMLElement {
     const disk = d.storage[0] && d.storage[0].partitions[0];
 
     set("facts_channels", `${d.channels.filter((c) => c.online).length} / ${d.device.channels}`);
-    set("facts_channels_hint", `запис: ${d.totals.recording}`);
+    set("facts_channels_hint", t("recording: {count}", { count: d.totals.recording }));
     set("facts_bitrate", fmtBitrate(d.totals.bitrate));
     set("facts_disk", disk ? `${disk.used_percent}%` : "—");
     set("facts_archive", fmtDay(d.archive.from));
-    set("facts_archive_hint", `по ${fmtDay(d.archive.to)}`);
+    set("facts_archive_hint", t("to {day}", { day: fmtDay(d.archive.to) }));
     set("facts_uptime", fmtDuration(d.device.uptime_seconds));
     set("facts_uptime_hint", fmtClockFull(d.device.device_time));
 
@@ -959,13 +980,13 @@ class XmeyePanel extends HTMLElement {
       // fewer of them is one fewer to keep working.
       const address = await this._socketAddress();
       if (!address) {
-        this._osd = { player: "native", error: "немає адреси для потоку" };
+        this._osd = { player: "native", error: t("no address for the stream") };
         this._updateOsd();
         return;
       }
       const socket = new WallSocket(this._playerLog, (_channel, said) => {
         if (this._nativeSocket !== socket) return;
-        this._osd = { player: "native", error: WALL_TROUBLE[said.reason] || said.reason };
+        this._osd = { player: "native", error: t(WALL_TROUBLE[said.reason] || said.reason) };
         this._updateOsd();
       });
       socket.add(channel, player);
@@ -1058,10 +1079,10 @@ class XmeyePanel extends HTMLElement {
     this._noteDiag("falling back", reason);
     if (this._liveStream === "main") {
       this._liveStream = "sub";
-      this._fallbackNote = `${reason}. Перейшов на додатковий потік.`;
+      this._fallbackNote = t("{reason}. Switched to the sub stream.", { reason });
     } else {
       this._player = "mjpeg";
-      this._fallbackNote = `${reason}. Перейшов на стоп-кадри.`;
+      this._fallbackNote = t("{reason}. Switched to snapshots.", { reason });
     }
     this._remountLive();
   }
@@ -1411,10 +1432,10 @@ class XmeyePanel extends HTMLElement {
   }
 
   _template() {
-    if (this._loading && !this._detail) return this._shell(`<div class="empty">Завантаження…</div>`);
+    if (this._loading && !this._detail) return this._shell(`<div class="empty">${t("Loading…")}</div>`);
     if (this._error && !this._detail)
       return this._shell(`<div class="empty error">${this._error}</div>`);
-    if (!this._detail) return this._shell(`<div class="empty">Немає даних</div>`);
+    if (!this._detail) return this._shell(`<div class="empty">${t("No data")}</div>`);
 
     const tabs = {
       overview: this._overview(),
@@ -1431,13 +1452,13 @@ class XmeyePanel extends HTMLElement {
   _shell(body) {
     const d = this._detail;
     const tabs = [
-      ["overview", "Огляд"],
-      ["channels", "Канали"],
-      ["archive", "Архів"],
-      ["config", "Конфігурація"],
-      ["settings", "Налаштування"],
-      ["log", "Журнал"],
-      ["debug", "Звіт"],
+      ["overview", t("Overview")],
+      ["channels", t("Channels")],
+      ["archive", t("Archive")],
+      ["config", t("Configuration")],
+      ["settings", t("Settings")],
+      ["log", t("Log")],
+      ["debug", t("Report")],
     ];
     const picker =
       this._devices.length > 1
@@ -1484,13 +1505,14 @@ class XmeyePanel extends HTMLElement {
   _headerFacts(d) {
     const disk = d.storage[0] && d.storage[0].partitions[0];
     const facts = [
-      ["Канали", `${d.channels.filter((c) => c.online).length} / ${d.device.channels}`,
-       `запис: ${d.totals.recording}`, "facts_channels"],
-      ["Потік", fmtBitrate(d.totals.bitrate), "", "facts_bitrate"],
-      ["Диск", disk ? `${disk.used_percent}%` : "—",
-       disk ? `${(disk.total_mb / 1024).toFixed(0)} ГБ` : "", "facts_disk"],
-      ["Архів", fmtDay(d.archive.from), `по ${fmtDay(d.archive.to)}`, "facts_archive"],
-      ["Працює", fmtDuration(d.device.uptime_seconds), fmtClockFull(d.device.device_time),
+      [t("Channels"), `${d.channels.filter((c) => c.online).length} / ${d.device.channels}`,
+       t("recording: {count}", { count: d.totals.recording }), "facts_channels"],
+      [t("Stream"), fmtBitrate(d.totals.bitrate), "", "facts_bitrate"],
+      [t("Disk"), disk ? `${disk.used_percent}%` : "—",
+       disk ? `${(disk.total_mb / 1024).toFixed(0)} ${t("GB")}` : "", "facts_disk"],
+      [t("Archive"), fmtDay(d.archive.from), t("to {day}", { day: fmtDay(d.archive.to) }),
+       "facts_archive"],
+      [t("Uptime"), fmtDuration(d.device.uptime_seconds), fmtClockFull(d.device.device_time),
        "facts_uptime"],
     ];
     return `
@@ -1558,7 +1580,7 @@ class XmeyePanel extends HTMLElement {
             (l) =>
               `<button class="ghost layout ${l.id === this._layout ? "active" : ""}"
                        data-layout="${l.id}"
-                       title="${l.id} ${channelWord(l.id)}">${layoutIcon(l)}</button>`
+                       title="${channelCount(l.id)}">${layoutIcon(l)}</button>`
           ).join("")}
         </div>
         ${
@@ -1570,9 +1592,12 @@ class XmeyePanel extends HTMLElement {
                </div>`
             : ""
         }
-        <div class="hint">${channels.length} з ${this._detail.device.channels} каналів на стіні</div>
+        <div class="hint">${t("{shown} of {total} channels on the wall", {
+          shown: channels.length,
+          total: this._detail.device.channels,
+        })}</div>
         <button class="ghost wall-full" id="wallfull"
-                title="На весь екран (вихід — Esc)">${fullscreenIcon()}</button>
+                title="${t("Fullscreen (Esc to leave)")}">${fullscreenIcon()}</button>
       </div>`;
   }
 
@@ -1619,31 +1644,31 @@ class XmeyePanel extends HTMLElement {
       // twice and cost half the row.
       const state = shown
         ? channel.online
-          ? "На стіні, канал онлайн"
-          : "На стіні, канал офлайн"
-        : "Не на стіні";
+          ? t("On the wall, camera online")
+          : t("On the wall, camera offline")
+        : t("Not on the wall");
       return `
         <li class="pick ${shown ? "on" : "off"}" data-index="${channel.index}"
-            title="Перетягніть рядок, щоб змінити порядок">
+            title="${t("Drag the row to reorder")}">
           <button class="pick-dot ${shown ? "shown" : ""} ${channel.online ? "online" : ""}"
                   data-pick="${channel.index}" title="${state}"></button>
           <span class="pick-grip"></span>
           <span class="pick-num">${channel.index + 1}</span>
           <span class="pick-name" title="${channel.name}">${channel.name}</span>
           <select class="pick-stream" data-stream="${channel.index}"
-                  title="Потік цієї камери на стіні">
+                  title="${t("Stream of this camera on the wall")}">
             ${WALL_STREAMS.map(
               ([id, label]) =>
                 `<option value="${id}" ${
                   id === this._wallStream(channel.index) ? "selected" : ""
-                }>${label}</option>`
+                }>${t(label)}</option>`
             ).join("")}
           </select>
         </li>`;
     });
     return `
       <aside class="picker">
-        <div class="picker-head">Канали стіни</div>
+        <div class="picker-head">${t("Wall channels")}</div>
         <ul class="pick-list">${rows.join("")}</ul>
       </aside>`;
   }
@@ -1798,9 +1823,9 @@ class XmeyePanel extends HTMLElement {
       dot.classList.toggle("shown", shown);
       dot.title = shown
         ? dot.classList.contains("online")
-          ? "На стіні, канал онлайн"
-          : "На стіні, канал офлайн"
-        : "Не на стіні";
+          ? t("On the wall, camera online")
+          : t("On the wall, camera offline")
+        : t("Not on the wall");
     }
     this._reflowWall();
   }
@@ -1826,7 +1851,7 @@ class XmeyePanel extends HTMLElement {
           <div class="badges">${this._badges(channel)}</div>
         </div>
         <div class="cell-foot" data-field="wall${channel.index}">
-          ${channel.online ? "підключення…" : "офлайн"}
+          ${channel.online ? t("connecting…") : t("offline")}
         </div>
       </div>`;
   }
@@ -1861,7 +1886,7 @@ class XmeyePanel extends HTMLElement {
     const player = new Player(
       canvas,
       (stats) => this._updateWallCell(index, stats),
-      () => this._updateWallCell(index, { error: "не вдалося декодувати" }),
+      () => this._updateWallCell(index, { error: t("could not decode") }),
       this._channelLog(index)
     );
     this._wall.set(index, player);
@@ -1889,10 +1914,10 @@ class XmeyePanel extends HTMLElement {
     const socket = new WallSocket(this._playerLog, null);
     socket.onChannelError = (channel, said) => {
       if (this._wallReader !== socket) return;
-      const what = WALL_TROUBLE[said.reason] || said.reason;
+      const what = t(WALL_TROUBLE[said.reason] || said.reason);
       const next = said.attempt
-        ? `спроба ${said.attempt} через ${said.retryIn}с`
-        : "відновити не вдалося";
+        ? t("attempt {attempt} in {seconds}s", { attempt: said.attempt, seconds: said.retryIn })
+        : t("could not be recovered");
       this._noteDiag("wall", `channel ${channel}: ${said.reason} ${said.detail || ""}`.trim());
       this._updateWallCell(channel, { error: `${what} · ${next}` });
     };
@@ -1900,7 +1925,7 @@ class XmeyePanel extends HTMLElement {
     const address = await this._socketAddress();
     if (!address) {
       canvases.forEach((canvas) =>
-        this._updateWallCell(Number(canvas.dataset.wall), { error: "немає адреси для потоку" })
+        this._updateWallCell(Number(canvas.dataset.wall), { error: t("no address for the stream") })
       );
       return;
     }
@@ -1966,7 +1991,8 @@ class XmeyePanel extends HTMLElement {
     // Back off a little each time, so a recorder that is genuinely out of
     // connections is not hammered.
     const delay = WALL_RETRY_DELAY * attempt;
-    this._updateWallCell(index, { error: `${message} · спроба ${attempt} через ${delay / 1000}с` });
+    const next = t("attempt {attempt} in {seconds}s", { attempt, seconds: delay / 1000 });
+    this._updateWallCell(index, { error: `${message} · ${next}` });
     setTimeout(() => {
       if (this._tab === "overview" && this._live === null) this._restartWallTile(index);
     }, delay);
@@ -2125,7 +2151,7 @@ class XmeyePanel extends HTMLElement {
     if (stats.error) {
       foot.textContent = `⚠ ${stats.error}`;
     } else if (stats.connecting) {
-      foot.textContent = "підключення…";
+      foot.textContent = t("connecting…");
     } else {
       foot.textContent = fmtQuality(stats);
     }
@@ -2133,9 +2159,9 @@ class XmeyePanel extends HTMLElement {
 
   _badges(channel) {
     return [
-      channel.recording ? `<span class="badge rec">запис</span>` : "",
-      channel.motion ? `<span class="badge motion">рух</span>` : "",
-      channel.video_loss ? `<span class="badge loss">немає сигналу</span>` : "",
+      channel.recording ? `<span class="badge rec">${t("recording")}</span>` : "",
+      channel.motion ? `<span class="badge motion">${t("motion")}</span>` : "",
+      channel.video_loss ? `<span class="badge loss">${t("no signal")}</span>` : "",
     ].join("");
   }
 
@@ -2151,7 +2177,7 @@ class XmeyePanel extends HTMLElement {
             picture
               ? `<img src="${picture}" data-entity="${channel.entity_id}"
                       alt="${channel.name}" loading="lazy">`
-              : `<div class="noimage">${channel.online ? "Немає кадру" : "Офлайн"}</div>`
+              : `<div class="noimage">${channel.online ? t("No frame") : t("Offline")}</div>`
           }
           <div class="badges">${this._badges(channel)}</div>
         </div>
@@ -2159,7 +2185,7 @@ class XmeyePanel extends HTMLElement {
           <div class="tile-name">${channel.name}</div>
           <div class="tile-meta" data-field="meta">${
             channel.resolution || channel.status
-          } · ${channel.bitrate} кбіт/с</div>
+          } · ${t("{kbps} kbit/s", { kbps: channel.bitrate })}</div>
         </div>
       </div>`;
   }
@@ -2169,8 +2195,8 @@ class XmeyePanel extends HTMLElement {
     return `
       <table class="data">
         <thead>
-          <tr><th>#</th><th>Назва</th><th>Стан</th><th>Роздільність</th>
-              <th>Бітрейт</th><th>Запис</th><th>Рух</th></tr>
+          <tr><th>#</th><th>${t("Name")}</th><th>${t("State")}</th><th>${t("Resolution")}</th>
+              <th>${t("Bitrate")}</th><th>${t("Recording")}</th><th>${t("Motion")}</th></tr>
         </thead>
         <tbody>
           ${d.channels
@@ -2179,11 +2205,11 @@ class XmeyePanel extends HTMLElement {
             <tr class="${c.online ? "" : "dim"}">
               <td>${c.index + 1}</td>
               <td>${c.name}</td>
-              <td>${c.online ? "Підключено" : c.status}</td>
+              <td>${c.online ? t("Connected") : c.status}</td>
               <td>${c.resolution || "—"}</td>
               <td>${c.bitrate || 0}</td>
-              <td>${c.recording ? "так" : "—"}</td>
-              <td>${c.motion ? "так" : "—"}</td>
+              <td>${c.recording ? t("yes") : "—"}</td>
+              <td>${c.motion ? t("yes") : "—"}</td>
             </tr>`
             )
             .join("")}
@@ -2945,7 +2971,7 @@ class XmeyePanel extends HTMLElement {
 
     // First line: what is playing and how. Second line: how well it goes.
     // The split is fixed so the line does not reflow as numbers change.
-    const what = [PLAYERS.find(([id]) => id === osd.player)?.[1] || osd.player];
+    const what = [t(PLAYERS.find(([id]) => id === osd.player)?.[1] || osd.player)];
     if (osd.codec) what.push(osd.codec.toUpperCase());
     if (osd.codecString) what.push(osd.codecString);
     if (osd.hardware && osd.hardware !== "no-preference") what.push(osd.hardware);
