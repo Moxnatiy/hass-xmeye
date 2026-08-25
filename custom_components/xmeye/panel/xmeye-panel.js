@@ -128,12 +128,14 @@ const pauseIcon = () =>
     { filled: true }
   );
 
-//: Ten seconds back or on: a double chevron, mirrored rather than redrawn.
-const stepIcon = (back) =>
+//: Jump to the event before or after: a chevron against a bar, the mark every
+//: player uses for "skip to". A plain double chevron would read as winding,
+//: which is what these buttons stopped doing.
+const eventIcon = (back) =>
   mark(
     back
-      ? '<path d="M7.6 4 3.6 8l4 4"/><path d="M12.4 4l-4 4 4 4"/>'
-      : '<path d="M8.4 4l4 4-4 4"/><path d="M3.6 4l4 4-4 4"/>'
+      ? '<path d="M11.6 3.6 6.1 8l5.5 4.4"/><path d="M3.9 3.6v8.8"/>'
+      : '<path d="M4.4 3.6 9.9 8l-5.5 4.4"/><path d="M12.1 3.6v8.8"/>'
   );
 
 const closeIcon = () => mark('<path d="M4 4l8 8"/><path d="M12 4l-8 8"/>');
@@ -600,6 +602,24 @@ const toLocalIso = (date) => {
   );
 };
 const fmtClock = (iso) => (iso ? iso.slice(11, 16) : "");
+
+/**
+ * A moment of archive playback, on the clock the recorder keeps.
+ *
+ * The recorder's times are naive local ones, and the timeline is drawn from
+ * them with ``getHours``. Playback times used to be stored as ISO strings and
+ * read back by slicing out the time — which is the *UTC* part of an ISO string.
+ * In any browser east or west of Greenwich the picture's clock and the bar
+ * under it then disagreed by the offset: three hours apart in Kyiv. Playback
+ * carries plain epoch milliseconds now, and this is the one place they are
+ * turned into something to read.
+ */
+const fmtStamp = (ms) => {
+  if (ms == null) return "—";
+  const at = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+};
 
 /**
  * A moment on the timeline's ruler, in as much detail as the step needs.
@@ -2356,20 +2376,23 @@ class XmeyePanel extends HTMLElement {
     return `
       <div class="player">
         <div class="player-head">
-          <span>${fmtClockFull(p.start)} — ${t("channel {channel}", { channel: this._selectedChannel + 1 })}</span>
+          <span id="playhead">${fmtStamp(p.start)} — ${t("channel {channel}", { channel: this._selectedChannel + 1 })}</span>
           <button class="ghost icon" id="closeplay"
                   title="${t("Close")}">${closeIcon()}</button>
         </div>
         <div class="player-screen"><canvas id="playcanvas"></canvas></div>
+        <div class="player-error" id="playerror" ${p.error ? "" : "hidden"}>${
+          p.error ? escapeHtml(p.error) : ""
+        }</div>
         <div class="player-bar">
-          <button class="ghost icon" id="stepback"
-                  title="${t("back 10 s")}">${stepIcon(true)}</button>
+          <button class="ghost icon" id="prevevent"
+                  title="${t("Previous event")}">${eventIcon(true)}</button>
           <button class="ghost icon" id="playpause"
                   title="${p.paused ? t("Play") : t("Pause")}">${
                     p.paused ? playIcon() : pauseIcon()
                   }</button>
-          <button class="ghost icon" id="stepfwd"
-                  title="${t("forward 10 s")}">${stepIcon(false)}</button>
+          <button class="ghost icon" id="nextevent"
+                  title="${t("Next event")}">${eventIcon(false)}</button>
           <div class="rates">
             ${rates
               .map(
@@ -2378,7 +2401,7 @@ class XmeyePanel extends HTMLElement {
               )
               .join("")}
           </div>
-          <div class="player-time" id="playtime">${fmtClockFull(p.position || p.start)}</div>
+          <div class="player-time" id="playtime">${fmtStamp(p.position ?? p.start)}</div>
         </div>
       </div>`;
   }
@@ -2393,18 +2416,26 @@ class XmeyePanel extends HTMLElement {
    * shown beside the one asked for, because the link, not the wish, decides it.
    */
   async _startPlayback(when) {
+    // Seeking inside a player that is already up keeps its canvas, and a canvas
+    // keeps its picture: where we were stays on screen until the first frame of
+    // where we are going arrives. Rendering the tab again would put an empty
+    // canvas in its place, which reads as the page reloading — a black gap, and
+    // everything below it jumping as the element is replaced.
+    const inPlace =
+      Boolean(this._playback) && Boolean(this.shadowRoot.getElementById("playcanvas"));
     this._stopPlayback();
     const day = this._recordingsDay;
     const start = when instanceof Date ? when : new Date(`${day}T00:00:00`);
     const end = new Date(`${day}T23:59:59`);
     this._playback = {
-      start: start.toISOString(),
-      end: end.toISOString(),
+      start: start.getTime(),
+      end: end.getTime(),
       rate: this._playback ? this._playback.rate : 1,
       paused: false,
-      position: start.toISOString(),
+      position: start.getTime(),
     };
-    this._render();
+    if (inPlace) this._refreshPlayer();
+    else this._render();
 
     const canvas = this.shadowRoot.getElementById("playcanvas");
     if (!canvas) return;
@@ -2422,8 +2453,7 @@ class XmeyePanel extends HTMLElement {
       },
       (reason) => {
         if (!mine()) return;
-        this._playback.error = reason;
-        this._render();
+        this._failPlayback(reason);
       },
       this._playerLog,
       {},
@@ -2443,9 +2473,98 @@ class XmeyePanel extends HTMLElement {
       .catch((err) => {
         // A player that has been replaced is allowed to fail quietly.
         if (!mine()) return;
-        this._playback.error = String(err.message || err);
-        this._render();
+        this._failPlayback(String(err.message || err));
       });
+  }
+
+  /**
+   * Bring the player's chrome up to date without touching its canvas.
+   *
+   * Everything here is what a redraw of the tab would have done anyway; the
+   * canvas is the one thing that must survive, because it is holding the last
+   * frame of the previous position while the new one is dialled.
+   */
+  _refreshPlayer() {
+    const root = this.shadowRoot;
+    const p = this._playback;
+    const head = root.getElementById("playhead");
+    if (head)
+      head.textContent = `${fmtStamp(p.start)} — ${t("channel {channel}", {
+        channel: this._selectedChannel + 1,
+      })}`;
+    const time = root.getElementById("playtime");
+    if (time) time.textContent = fmtStamp(p.start);
+    const playPause = root.getElementById("playpause");
+    if (playPause) {
+      playPause.innerHTML = pauseIcon();
+      playPause.title = t("Pause");
+    }
+    const failure = root.getElementById("playerror");
+    if (failure) {
+      failure.textContent = "";
+      failure.hidden = true;
+    }
+    this._drawTrack();
+  }
+
+  /**
+   * Say that playback failed.
+   *
+   * Worth its own method now the picture no longer goes black on a failure: a
+   * seek that never arrives leaves the previous frame sitting there, and
+   * without this it would look like a stream playing perfectly still. The
+   * reason used to be stored and never shown by anything.
+   */
+  _failPlayback(reason) {
+    if (!this._playback) return;
+    this._playback.error = reason;
+    const failure = this.shadowRoot.getElementById("playerror");
+    if (!failure) {
+      this._render();
+      return;
+    }
+    failure.textContent = reason;
+    failure.hidden = false;
+  }
+
+  /**
+   * The moments worth jumping between: where the recording changes kind.
+   *
+   * Stepping ten seconds was arbitrary — ten seconds of an empty yard is the
+   * same empty yard. What is worth landing on is where something changed:
+   * motion starting, and the recorder falling back to its schedule when it
+   * stops. Every recording start is not that. Continuous recording splits into
+   * a file every minute or so, and hopping between those is stepping by an
+   * arbitrary amount again, only less predictably: 664 of them in this day.
+   */
+  _eventMarks() {
+    const rec = this._recordings;
+    if (!rec || !rec.recordings) return [];
+    const ordered = [...rec.recordings].sort((a, b) => (a.begin < b.begin ? -1 : 1));
+    const marks = [];
+    let previous = null;
+    for (const record of ordered) {
+      if (record.event !== previous) {
+        marks.push(new Date(record.begin).getTime());
+        previous = record.event;
+      }
+    }
+    return marks;
+  }
+
+  _jumpEvent(forward) {
+    const marks = this._eventMarks();
+    if (!marks.length) return;
+    const from = this._playback
+      ? this._playback.position ?? this._playback.start
+      : this._dayStart();
+    // A second of slack, or the mark just landed on is found again at once and
+    // the button does nothing.
+    const next = forward
+      ? marks.find((mark) => mark > from + 1000)
+      : marks.filter((mark) => mark < from - 1000).pop();
+    if (next === undefined) return;
+    this._startPlayback(new Date(next));
   }
 
   /**
@@ -2622,9 +2741,7 @@ class XmeyePanel extends HTMLElement {
   _placeCursor(from, span) {
     const cursor = this.shadowRoot.getElementById("cursor");
     if (!cursor) return;
-    const at = this._playback && this._playback.position
-      ? new Date(this._playback.position).getTime()
-      : null;
+    const at = this._playback ? this._playback.position ?? null : null;
     const inside = at !== null && at >= from && at <= from + span;
     cursor.style.display = inside ? "" : "none";
     if (inside) cursor.style.left = `${((at - from) / span) * 100}%`;
@@ -2647,13 +2764,13 @@ class XmeyePanel extends HTMLElement {
   _updatePlaybackTime(stats) {
     if (!this._playback || !stats.position) return;
     const previous = this._playback.position;
-    this._playback.position = new Date(stats.position).toISOString();
+    this._playback.position = stats.position;
 
     // The recorder feeds the archive at its own pace and may not reach the
     // requested 8x, so the measured speed is shown next to the requested one.
     const now = performance.now();
     if (previous && this._playback.measuredAt) {
-      const media = (new Date(this._playback.position) - new Date(previous)) / 1000;
+      const media = (this._playback.position - previous) / 1000;
       const wall = (now - this._playback.measuredAt) / 1000;
       if (wall > 0.5) this._playback.actual = media / wall;
     }
@@ -2663,7 +2780,7 @@ class XmeyePanel extends HTMLElement {
     if (label) {
       const actual = this._playback.actual;
       label.textContent =
-        fmtClockFull(this._playback.position) +
+        fmtStamp(this._playback.position) +
         (actual ? t("  (really ×{rate})", { rate: actual.toFixed(1) }) : "");
     }
 
@@ -3574,15 +3691,10 @@ class XmeyePanel extends HTMLElement {
       })
     );
 
-    const step = (seconds) => {
-      const from = this._playback?.position || this._playback?.start;
-      if (!from) return;
-      this._startPlayback(new Date(new Date(from).getTime() + seconds * 1000));
-    };
-    const back = root.getElementById("stepback");
-    if (back) back.addEventListener("click", () => step(-10));
-    const forward = root.getElementById("stepfwd");
-    if (forward) forward.addEventListener("click", () => step(10));
+    const back = root.getElementById("prevevent");
+    if (back) back.addEventListener("click", () => this._jumpEvent(false));
+    const forward = root.getElementById("nextevent");
+    if (forward) forward.addEventListener("click", () => this._jumpEvent(true));
 
     const closePlay = root.getElementById("closeplay");
     if (closePlay) closePlay.addEventListener("click", () => this._closePlayback());
@@ -3959,6 +4071,10 @@ const STYLES = `
   .player-screen canvas { max-width:100%; max-height:60vh; display:block; }
   .player-bar { display:flex; align-items:center; gap:6px; padding:10px 14px;
     background: var(--card-background-color); flex-wrap:wrap; }
+  /* The picture no longer blanks when a stream fails, so the failure has to say
+     so itself — otherwise a dead seek looks like a very still camera. */
+  .player-error { padding:8px 14px; font-size:13px; color: var(--error-color,#f44336);
+    background: var(--card-background-color); border-top:1px solid var(--divider-color); }
   /* Every mark in the bar is a 16px box, so the buttons are square and equal
      however wide the glyph inside happens to be. */
   button.icon { display:flex; align-items:center; justify-content:center;

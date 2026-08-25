@@ -196,7 +196,40 @@ smaller stream and then to snapshots rather than showing a black screen.
 ## The archive player
 
 Click the timeline to play from that moment. The cursor follows the frame
-currently on screen. There is pause, ±10 s stepping, and speeds from ×1 to ×8.
+currently on screen. There is pause, speeds from ×1 to ×8, and a jump to the
+event before or after.
+
+The requested moment is reached exactly. A recording is played by name, and the
+recorder plays a named file from its own start — so a click at 14:30 inside a
+recording that began at 14:22 used to play from 14:22, and recordings here run
+to thirty-eight minutes. Skipping to the moment by reading and discarding costs
+a minute of 4K video for eight minutes of archive, so it is not done: the claim
+carries the moment as its `StartTime`, and the firmware honours it to the
+second. The same moment is passed for every recording of the run and ignored
+outside each one's own bounds, so only the file holding it acts on it.
+
+### Jumping by event
+
+Stepping ten seconds was arbitrary — ten seconds of an empty yard is the same
+empty yard. The buttons land on where something changed instead: motion
+starting, and the recorder falling back to its schedule when it stops. Every
+recording start is not that; continuous recording splits into its own files, and
+hopping between those is stepping by an arbitrary amount again, only less
+predictably. On the tested day that is 554 transitions against 664 recordings.
+
+### Seeking does not reload the picture
+
+Seeking inside a player that is already up keeps its canvas, and a canvas keeps
+its picture: where you were stays on screen until the first frame of where you
+are going arrives. Rendering the tab again would put an empty canvas in its
+place, which read as the page reloading — a black gap, and everything below it
+jumping as the element was replaced. It matters more than it sounds: finding the
+recordings for a busy day takes the recorder several seconds, and that wait is
+now spent looking at the last frame rather than at nothing.
+
+The cost is that a failed stream no longer announces itself by going black, so
+playback failures are now shown under the picture. They were being stored and
+read by nothing at all.
 
 ### The bar zooms
 

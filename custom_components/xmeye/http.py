@@ -150,6 +150,7 @@ class XmeyePlaybackView(HomeAssistantView):
         # One clock for the whole run, so crossing into the next recording is
         # just another keyframe the timeline follows.
         clock = MediaClock()
+
         try:
             # One recording is one session, so playing across a stretch of the
             # day means walking the files in order.
@@ -163,7 +164,14 @@ class XmeyePlaybackView(HomeAssistantView):
                 )
                 archive.stream_index = stream_index
                 await archive.start()
-                async for frame in archive.frames(record, timeout=25):
+                # The moment asked for is passed to every recording of the run.
+                # The firmware starts the file there, to the second, and ignores
+                # it outside the file's own bounds — so only the recording that
+                # holds the moment acts on it, and the rest play from their
+                # start. Without it a click at 14:30 inside a recording that
+                # began at 14:22 played from 14:22, and these run to
+                # thirty-eight minutes: aiming at the timeline was pointless.
+                async for frame in archive.frames(record, begin=begin, timeout=25):
                     if not frame.is_video or not frame.has_valid_nal:
                         skipped += not frame.has_valid_nal
                         continue

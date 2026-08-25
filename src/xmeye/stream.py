@@ -262,6 +262,16 @@ class ArchiveStream(_MediaSession):
         if isinstance(record, RecordFile):
             if record.begin is None or record.end is None:
                 raise ValueError("The record has no time bounds")
+            # A moment inside the recording is honoured, and exactly: asking for
+            # 14:30:00 of a file that began at 14:22:12 answers with a keyframe
+            # stamped 14:30:00. Measured on the device, and worth knowing —
+            # recordings here run up to thirty-eight minutes, so playing one
+            # from its start to reach a moment in the middle means reading
+            # minutes of 4K video before anything can be shown.
+            if begin is not None and record.begin <= begin <= record.end:
+                # The size no longer describes what will arrive, so it cannot be
+                # used to decide the download has finished.
+                return format_time(begin), format_time(record.end), 0
             return format_time(record.begin), format_time(record.end), record.size_bytes
         if begin is None or end is None:
             raise ValueError("Downloading by name needs begin and end")
@@ -279,6 +289,10 @@ class ArchiveStream(_MediaSession):
     ) -> AsyncIterator[MediaFrame]:
         """Download a recording, yielding frames as they arrive.
 
+        :param begin: with a :class:`RecordFile`, a moment inside it to start
+            from; the firmware honours it to the second. Outside the recording's
+            own bounds it is ignored, so it can be passed for every file of a
+            run and only the one holding the moment acts on it.
         :param by_time: pull a continuous time range instead of one file. Handy
             when the interval crosses file boundaries; ``record`` is ignored in
             this mode and ``begin`` and ``end`` are required instead.

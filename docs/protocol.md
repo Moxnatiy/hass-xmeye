@@ -510,6 +510,27 @@ The channel lives in the recording's path — `/idea0/2026-08-11/001/…` is cha
 playback has to name a recording, and covering a stretch of the day means
 walking the recordings in order rather than asking for a time range.
 
+### ByName still honours StartTime, and exactly
+
+Naming a recording does not mean playing it whole. The claim's `StartTime` is
+obeyed to the second even in `ByName` mode, which matters because a recording
+here can be thirty-eight minutes long:
+
+| Claim | First keyframe returned |
+|---|---|
+| `StartTime` = the file's own start (14:22:12) | 14:22:12 |
+| `StartTime` = a moment inside it (14:30:00) | **14:30:00** |
+| `Seek` sent into the running session | 14:22:12 — ignored |
+
+So seeking costs nothing: no reading and discarding, no second session. The
+`Seek` action does nothing here, which fits the rest of the position and speed
+vocabulary being inert on this firmware.
+
+Note that `Parameter.FileName` and `StartTime` must agree — the moment has to
+lie inside the named recording. Outside it the firmware falls back to the file's
+own start, which is convenient: the same moment can be passed for every file of
+a run and only the one holding it acts on it.
+
 ## 12. Connection limit and CombinMode
 
 `NetWork.NetCommon.TCPMaxConn` caps how many TCP connections the recorder
