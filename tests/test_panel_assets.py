@@ -204,3 +204,33 @@ def test_paced_playback_never_empties_its_own_read_ahead() -> None:
             "_enqueue empties the backlog without checking this.rate first, so "
             "archive playback sheds the read-ahead it is deliberately holding."
         )
+
+
+#: The timeline methods that run on every wheel notch and every drag frame.
+_TIMELINE_REDRAWS = ("_zoomTimeline", "_panTimeline", "_drawTrack", "_placeCursor")
+
+
+def test_zooming_the_timeline_does_not_redraw_the_panel() -> None:
+    """Zooming must repaint the bar, not the page.
+
+    ``_render()`` rebuilds the archive tab, and rebuilding it replaces the
+    canvas the archive player is drawing into — so a wheel notch would restart
+    playback, and a drag would restart it sixty times a second. The bar is
+    redrawn on its own instead, which is why ``_drawTrack`` exists at all. The
+    cheap way to write these methods is the one that breaks that, so it is
+    worth saying out loud.
+    """
+    lines = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8").splitlines()
+    method = None
+    offenders = []
+    for number, line in enumerate(lines):
+        found = re.match(r"\s{2}(?:async\s+)?(_[A-Za-z0-9]+)\(", line)
+        if found:
+            method = found.group(1)
+        if method in _TIMELINE_REDRAWS and "this._render()" in line:
+            offenders.append(f"{method}, line {number + 1}")
+
+    assert not offenders, (
+        f"the timeline calls this._render() from {offenders}, which rebuilds the "
+        "archive player's canvas. Redraw the bar with this._drawTrack() instead."
+    )

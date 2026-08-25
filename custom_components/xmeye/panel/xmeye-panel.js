@@ -99,6 +99,54 @@ const fullscreenIcon = () =>
   `<path d="M6 1.6H1.6V6"/><path d="M10 1.6h4.4V6"/>` +
   `<path d="M6 14.4H1.6V10"/><path d="M10 14.4h4.4V10"/></svg>`;
 
+/**
+ * The rest of the marks, at the same box as the two above.
+ *
+ * The archive controls were typed characters — ▶ ⏸ ⏪ ⏩ ✕ — and a typed
+ * character is sized by whichever font happens to answer for it. Five buttons
+ * in one row came out five heights, and no CSS fixes that without fighting the
+ * font. Drawn, they are all one 16px box and inherit the text colour, so the
+ * bar reads as a bar.
+ *
+ * ``filled`` shapes are solid (play, pause); the rest are strokes, which is
+ * what makes them sit beside the fullscreen mark without looking heavier.
+ */
+const mark = (body, { filled = false } = {}) =>
+  `<svg viewBox="0 0 ${ICON} ${ICON}" width="${ICON}" height="${ICON}" ` +
+  (filled
+    ? 'fill="currentColor"'
+    : 'fill="none" stroke="currentColor" stroke-width="1.6"' +
+      ' stroke-linecap="round" stroke-linejoin="round"') +
+  ` aria-hidden="true">${body}</svg>`;
+
+const playIcon = () => mark('<path d="M4.2 2.4 13 8l-8.8 5.6z"/>', { filled: true });
+
+const pauseIcon = () =>
+  mark(
+    '<rect x="4" y="2.6" width="2.9" height="10.8" rx="1"/>' +
+      '<rect x="9.1" y="2.6" width="2.9" height="10.8" rx="1"/>',
+    { filled: true }
+  );
+
+//: Ten seconds back or on: a double chevron, mirrored rather than redrawn.
+const stepIcon = (back) =>
+  mark(
+    back
+      ? '<path d="M7.6 4 3.6 8l4 4"/><path d="M12.4 4l-4 4 4 4"/>'
+      : '<path d="M8.4 4l4 4-4 4"/><path d="M3.6 4l4 4-4 4"/>'
+  );
+
+const closeIcon = () => mark('<path d="M4 4l8 8"/><path d="M12 4l-8 8"/>');
+
+//: Back to the whole day: arrows pushing out to both edges of a line.
+const fitIcon = () =>
+  mark('<path d="M1.8 8h12.4"/><path d="M4.6 5.2 1.8 8l2.8 2.8"/>' +
+       '<path d="M11.4 5.2 14.2 8l-2.8 2.8"/>');
+
+const prevIcon = () => mark('<path d="M10 3.4 5.4 8l4.6 4.6"/>');
+
+const nextIcon = () => mark('<path d="M6 3.4 10.6 8 6 12.6"/>');
+
 //: The tooltip on a layout button. Plural rules differ per language and this
 //: one sentence is not worth a plural engine, so each language phrases the
 //: whole line and the number goes in wherever its grammar wants it.
@@ -449,6 +497,27 @@ const SETTINGS_GROUPS = [
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
 
+const DAY_MS = 86400000;
+
+//: How far the archive timeline zooms in: a day divided by this is what fits
+//: across the bar, so 1440 leaves one minute on screen. A day at full width is
+//: about a minute per pixel, where a recording is often twenty seconds long —
+//: at that scale clicking the one you want is guesswork, which is the whole
+//: reason this exists. A minute across the bar is a second every few pixels.
+const MAX_ZOOM = 1440;
+
+//: Ruler steps in seconds, coarse enough to read and fine enough to land on.
+//: The largest step that still leaves a dozen marks across the window wins, so
+//: the labels stay about as dense however far in the view is.
+const RULER_STEPS = [
+  1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600,
+];
+
+//: How far the pointer must travel before a press on the timeline counts as a
+//: drag rather than a click. Without it every seek nudges the view, because a
+//: mouse never presses and releases at exactly the same pixel.
+const DRAG_SLOP = 4;
+
 //: How long to wait for HLS playback to begin before calling it a failure.
 //: Home Assistant needs about thirteen seconds to bring up a stream from this
 //: recorder (measured: master_playlist waited 13.25 s), so allow headroom.
@@ -532,6 +601,21 @@ const toLocalIso = (date) => {
 };
 const fmtClock = (iso) => (iso ? iso.slice(11, 16) : "");
 
+/**
+ * A moment on the timeline's ruler, in as much detail as the step needs.
+ *
+ * Hours on a whole-day view, seconds when the window is a minute wide. Printing
+ * seconds at every scale makes the ruler a wall of digits; printing hours at
+ * every scale makes it read 13:00 six times over.
+ */
+const fmtRuler = (ms, step) => {
+  const at = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  if (step >= 3600) return `${pad(at.getHours())}:00`;
+  if (step >= 60) return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+};
+
 class XmeyePanel extends HTMLElement {
   constructor() {
     super();
@@ -576,6 +660,10 @@ class XmeyePanel extends HTMLElement {
     this._playback = null;
     this._archivePlayer = null;
     this._recordings = null;
+    //: What stretch of the day the timeline shows: `scale` 1 is the whole day,
+    //: `start` is the left edge as a fraction of it. Kept as state rather than
+    //: read off the DOM so a redraw cannot lose the reader's place.
+    this._span = { scale: 1, start: 0 };
     this._recordingsDay = new Date().toISOString().slice(0, 10);
     this._configTree = null;
     this._configSection = null;
@@ -823,6 +911,9 @@ class XmeyePanel extends HTMLElement {
     const day = this._recordingsDay;
     const channel = this._selectedChannel;
     this._recordings = { loading: true };
+    // A new day or camera is a new bar; keeping yesterday's zoom would open it
+    // somewhere in the middle for no reason the reader could see.
+    this._span = { scale: 1, start: 0 };
     this._stopPlayback();
     this._render();
     try {
@@ -2223,8 +2314,10 @@ class XmeyePanel extends HTMLElement {
     else if (rec && rec.error) body = `<div class="empty error">${rec.error}</div>`;
     else if (rec && rec.recordings) body = this._timeline(rec);
 
+    // Yesterday and tomorrow are one button each, because stepping a day is
+    // what this control is used for and typing a date is not.
     return `
-      <div class="toolbar">
+      <div class="toolbar archive-bar">
         <select id="channel">
           ${enabled
             .map(
@@ -2235,7 +2328,13 @@ class XmeyePanel extends HTMLElement {
             )
             .join("")}
         </select>
-        <input type="date" id="day" value="${this._recordingsDay}">
+        <div class="daypick">
+          <button class="ghost step" id="prevday"
+                  title="${t("Previous day")}">${prevIcon()}</button>
+          <input type="date" id="day" value="${this._recordingsDay}">
+          <button class="ghost step" id="nextday"
+                  title="${t("Next day")}">${nextIcon()}</button>
+        </div>
         <button class="primary" id="search">${t("Show")}</button>
       </div>
       ${this._playback ? this._playbackView() : ""}
@@ -2258,13 +2357,19 @@ class XmeyePanel extends HTMLElement {
       <div class="player">
         <div class="player-head">
           <span>${fmtClockFull(p.start)} — ${t("channel {channel}", { channel: this._selectedChannel + 1 })}</span>
-          <button class="ghost" id="closeplay">✕</button>
+          <button class="ghost icon" id="closeplay"
+                  title="${t("Close")}">${closeIcon()}</button>
         </div>
         <div class="player-screen"><canvas id="playcanvas"></canvas></div>
         <div class="player-bar">
-          <button class="ghost" id="playpause">${p.paused ? "▶" : "⏸"}</button>
-          <button class="ghost" id="stepback" title="${t("back 10 s")}">⏪</button>
-          <button class="ghost" id="stepfwd" title="${t("forward 10 s")}">⏩</button>
+          <button class="ghost icon" id="stepback"
+                  title="${t("back 10 s")}">${stepIcon(true)}</button>
+          <button class="ghost icon" id="playpause"
+                  title="${p.paused ? t("Play") : t("Pause")}">${
+                    p.paused ? playIcon() : pauseIcon()
+                  }</button>
+          <button class="ghost icon" id="stepfwd"
+                  title="${t("forward 10 s")}">${stepIcon(false)}</button>
           <div class="rates">
             ${rates
               .map(
@@ -2343,11 +2448,186 @@ class XmeyePanel extends HTMLElement {
       });
   }
 
-  _cursorShare() {
-    if (!this._playback || !this._playback.position) return 0;
-    const dayStart = new Date(`${this._recordingsDay}T00:00:00`).getTime();
-    const at = new Date(this._playback.position).getTime();
-    return Math.max(0, Math.min(100, ((at - dayStart) / 86400000) * 100));
+  /**
+   * The timeline: seek, zoom and pan on one bar.
+   *
+   * A press seeks and a drag pans, told apart by whether the pointer travelled.
+   * Both are needed and neither can be given up: a bar that pans on every press
+   * cannot be clicked, and one that cannot be panned is useless the moment it
+   * is zoomed past a screenful.
+   */
+  _bindTimeline(root) {
+    const timeline = root.getElementById("timeline");
+    const track = root.getElementById("track");
+    if (!timeline || !track) return;
+
+    const fractionAt = (event) => {
+      const box = track.getBoundingClientRect();
+      return Math.min(Math.max((event.clientX - box.left) / box.width, 0), 1);
+    };
+
+    timeline.addEventListener(
+      "wheel",
+      (event) => {
+        // The page must not scroll under a wheel meant for the bar.
+        event.preventDefault();
+        this._zoomTimeline(fractionAt(event), Math.exp(-event.deltaY * 0.0025));
+      },
+      { passive: false }
+    );
+
+    let press = null;
+    track.addEventListener("pointerdown", (event) => {
+      press = { x: event.clientX, fraction: fractionAt(event), moved: false };
+      track.setPointerCapture(event.pointerId);
+    });
+    track.addEventListener("pointermove", (event) => {
+      if (!press) return;
+      if (!press.moved && Math.abs(event.clientX - press.x) < DRAG_SLOP) return;
+      press.moved = true;
+      this._panTimeline((event.clientX - press.x) / track.getBoundingClientRect().width);
+      press.x = event.clientX;
+    });
+    track.addEventListener("pointerup", (event) => {
+      if (!press) return;
+      const { moved, fraction } = press;
+      press = null;
+      if (track.hasPointerCapture(event.pointerId))
+        track.releasePointerCapture(event.pointerId);
+      if (moved) return;
+      const { from, span } = this._timeSpan();
+      this._startPlayback(new Date(from + fraction * span));
+    });
+    track.addEventListener("pointercancel", () => {
+      press = null;
+    });
+
+    const fit = root.getElementById("zoomfit");
+    if (fit)
+      fit.addEventListener("click", () => {
+        this._span = { scale: 1, start: 0 };
+        this._drawTrack();
+      });
+
+    this._drawTrack();
+  }
+
+  _dayStart() {
+    return new Date(`${this._recordingsDay}T00:00:00`).getTime();
+  }
+
+  /** The stretch of the day the timeline is showing. */
+  _timeSpan() {
+    const span = DAY_MS / this._span.scale;
+    const from = this._dayStart() + this._span.start * DAY_MS;
+    return { from, to: from + span, span };
+  }
+
+  /** Keep the left edge inside the day, whatever the scale. */
+  _clampSpan(scale, start) {
+    return { scale, start: Math.min(Math.max(start, 0), 1 - 1 / scale) };
+  }
+
+  /**
+   * Zoom about a point of the bar, keeping the moment under it in place.
+   *
+   * Zooming about the centre instead would throw away the one thing the reader
+   * has told us — where they are looking — and every step in would have to be
+   * followed by hunting for the place again.
+   */
+  _zoomTimeline(fraction, factor) {
+    const { scale: was, start } = this._span;
+    const scale = Math.min(MAX_ZOOM, Math.max(1, was * factor));
+    if (scale === was) return;
+    const at = start + fraction / was;
+    this._span = this._clampSpan(scale, at - fraction / scale);
+    this._drawTrack();
+  }
+
+  _panTimeline(fraction) {
+    const { scale, start } = this._span;
+    this._span = this._clampSpan(scale, start - fraction / scale);
+    this._drawTrack();
+  }
+
+  /**
+   * Draw the bar for the stretch currently in view.
+   *
+   * Redrawn rather than transformed. A CSS scale would stretch the cursor and
+   * the hairline of a short recording along with everything else, and would
+   * still leave the ruler to be recomputed; and it would keep seven hundred
+   * elements in the document when forty are on screen. Only what falls inside
+   * the window is built, so zooming in makes this cheaper, not dearer.
+   */
+  _drawTrack() {
+    const root = this.shadowRoot;
+    const rec = this._recordings;
+    const blocks = root.getElementById("blocks");
+    if (!blocks || !rec || !rec.recordings) return;
+
+    const { from, to, span } = this._timeSpan();
+    const place = (ms) => ((ms - from) / span) * 100;
+
+    const drawn = [];
+    for (const record of rec.recordings) {
+      const begin = new Date(record.begin).getTime();
+      const end = new Date(record.end || record.begin).getTime();
+      if (end < from || begin > to) continue;
+      const left = place(begin);
+      // A recording of a few seconds is thinner than a pixel across a day, and
+      // an invisible block cannot be aimed at.
+      const width = Math.max(place(end) - left, 0.08);
+      const color = EVENT_COLORS[record.event] || "var(--primary-color)";
+      drawn.push(
+        `<div class="block" style="left:${left.toFixed(4)}%;` +
+          `width:${width.toFixed(4)}%;background:${color}" title="${fmtTime(
+            record.begin
+          )} → ${fmtTime(record.end)} · ${t(
+            EVENT_LABELS[record.event] || record.event
+          )} · ${fmtBytes(record.size)}"></div>`
+      );
+    }
+    blocks.innerHTML = drawn.join("");
+
+    const step = RULER_STEPS.find((seconds) => span / 1000 / seconds <= 12) || 21600;
+    const stepMs = step * 1000;
+    // Marks are aligned to the day rather than to the epoch, or a timezone off
+    // a whole hour would put every label on a half-hour.
+    const dayStart = this._dayStart();
+    const first = dayStart + Math.ceil((from - dayStart) / stepMs) * stepMs;
+    // The far edge of a whole-day view is midnight again, and a right-hand mark
+    // reading 00:00 looks like the day starting over. It is 24:00.
+    const name = (at) =>
+      at - dayStart >= DAY_MS && step >= 60 ? "24:00" : fmtRuler(at, step);
+    const ticks = [];
+    for (let at = first; at <= to; at += stepMs) {
+      const share = place(at);
+      // Marks are centred on their tick, so the two at the ends would hang half
+      // outside the bar. They are pushed in instead of being dropped.
+      const align =
+        share < 0.5 ? "none" : share > 99.5 ? "translateX(-100%)" : "translateX(-50%)";
+      ticks.push(
+        `<span style="left:${share.toFixed(4)}%;transform:${align}">${name(at)}</span>`
+      );
+    }
+    root.getElementById("ruler").innerHTML = ticks.join("");
+
+    const label = root.getElementById("zoomspan");
+    if (label) label.textContent = `${name(from)} – ${name(to)}`;
+
+    this._placeCursor(from, span);
+  }
+
+  /** Put the cursor where the frame on screen belongs, or hide it. */
+  _placeCursor(from, span) {
+    const cursor = this.shadowRoot.getElementById("cursor");
+    if (!cursor) return;
+    const at = this._playback && this._playback.position
+      ? new Date(this._playback.position).getTime()
+      : null;
+    const inside = at !== null && at >= from && at <= from + span;
+    cursor.style.display = inside ? "" : "none";
+    if (inside) cursor.style.left = `${((at - from) / span) * 100}%`;
   }
 
   _stopPlayback() {
@@ -2387,37 +2667,25 @@ class XmeyePanel extends HTMLElement {
         (actual ? t("  (really ×{rate})", { rate: actual.toFixed(1) }) : "");
     }
 
-    const cursor = this.shadowRoot.getElementById("cursor");
-    if (cursor) {
-      const dayStart = new Date(`${this._recordingsDay}T00:00:00`).getTime();
-      const share = ((stats.position - dayStart) / 86400000) * 100;
-      cursor.style.left = `${Math.max(0, Math.min(100, share))}%`;
+    const { from, to, span } = this._timeSpan();
+    // Zoomed in, playback runs off the right-hand edge in seconds. Rather than
+    // leave the reader chasing it, the window follows: when the cursor reaches
+    // the last sixth it is put back near the start of the view, so the picture
+    // and the bar stay describing the same moment.
+    if (this._span.scale > 1 && (stats.position > to - span * 0.15 || stats.position < from)) {
+      this._span = this._clampSpan(
+        this._span.scale,
+        (stats.position - this._dayStart() - span * 0.15) / DAY_MS
+      );
+      this._drawTrack();
+      return;
     }
+    this._placeCursor(from, span);
   }
 
   _timeline(rec) {
     if (!rec.recordings.length)
       return `<div class="empty">${t("Nothing recorded on {day}.", { day: this._recordingsDay })}</div>`;
-
-    const dayStart = new Date(`${this._recordingsDay}T00:00:00`).getTime();
-    const dayMs = 86400000;
-    const blocks = rec.recordings
-      .map((r) => {
-        const begin = new Date(r.begin).getTime();
-        const end = new Date(r.end || r.begin).getTime();
-        const left = ((begin - dayStart) / dayMs) * 100;
-        const width = Math.max(((end - begin) / dayMs) * 100, 0.15);
-        const color = EVENT_COLORS[r.event] || "var(--primary-color)";
-        return `<div class="block" style="left:${left}%;width:${width}%;background:${color}"
-                     title="${fmtTime(r.begin)} → ${fmtTime(r.end)} · ${
-          t(EVENT_LABELS[r.event] || r.event)
-        } · ${fmtBytes(r.size)}"></div>`;
-      })
-      .join("");
-
-    const hours = Array.from({ length: 25 }, (_, h) =>
-      h % 3 === 0 ? `<span style="left:${(h / 24) * 100}%">${String(h).padStart(2, "0")}</span>` : ""
-    ).join("");
 
     const byEvent = {};
     rec.recordings.forEach((r) => {
@@ -2426,14 +2694,23 @@ class XmeyePanel extends HTMLElement {
 
     return `
       <div class="card">
-        <div class="timeline">
+        <div class="timeline" id="timeline">
           <div class="track" id="track">
-            ${blocks}
-            <div class="cursor" id="cursor" style="left:${this._cursorShare()}%"></div>
+            <div class="blocks" id="blocks"></div>
+            <div class="cursor" id="cursor"></div>
           </div>
-          <div class="hours">${hours}</div>
+          <div class="ruler" id="ruler"></div>
         </div>
-        <div class="hint">${t("Click the bar to play from that moment.")}</div>
+        <div class="timeline-foot">
+          <div class="hint">${t(
+            "Click to play from that moment. Scroll to zoom, drag to move."
+          )}</div>
+          <div class="zoom">
+            <span class="zoom-span mono" id="zoomspan"></span>
+            <button class="ghost icon" id="zoomfit"
+                    title="${t("Fit the whole day")}">${fitIcon()}</button>
+          </div>
+        </div>
         <div class="legend">
           ${Object.entries(byEvent)
             .map(
@@ -3234,6 +3511,17 @@ class XmeyePanel extends HTMLElement {
     const search = root.getElementById("search");
     if (search) search.addEventListener("click", () => this._loadRecordings());
 
+    const stepDay = (days) => {
+      const at = new Date(`${this._recordingsDay}T00:00:00`);
+      at.setDate(at.getDate() + days);
+      this._recordingsDay = toLocalIso(at).slice(0, 10);
+      this._loadRecordings();
+    };
+    const previousDay = root.getElementById("prevday");
+    if (previousDay) previousDay.addEventListener("click", () => stepDay(-1));
+    const nextDay = root.getElementById("nextday");
+    if (nextDay) nextDay.addEventListener("click", () => stepDay(1));
+
     this._bindWallBar(root);
 
     root.querySelectorAll("[data-pick]").forEach((button) =>
@@ -3255,17 +3543,7 @@ class XmeyePanel extends HTMLElement {
       cell.addEventListener("click", () => this._openLive(Number(cell.dataset.channel)))
     );
 
-    const track = root.getElementById("track");
-    if (track)
-      track.addEventListener("click", (event) => {
-        // A click on the timeline seeks to that moment of the day.
-        const box = track.getBoundingClientRect();
-        const share = (event.clientX - box.left) / box.width;
-        const when = new Date(
-          new Date(`${this._recordingsDay}T00:00:00`).getTime() + share * 86400000
-        );
-        this._startPlayback(when);
-      });
+    this._bindTimeline(root);
 
     const playPause = root.getElementById("playpause");
     if (playPause)
@@ -3274,11 +3552,13 @@ class XmeyePanel extends HTMLElement {
         if (this._archivePlayer.paused) {
           this._archivePlayer.resume();
           this._playback.paused = false;
-          playPause.textContent = "⏸";
+          playPause.innerHTML = pauseIcon();
+          playPause.title = t("Pause");
         } else {
           this._archivePlayer.pause();
           this._playback.paused = true;
-          playPause.textContent = "▶";
+          playPause.innerHTML = playIcon();
+          playPause.title = t("Play");
         }
       });
 
@@ -3677,20 +3957,31 @@ const STYLES = `
   .player-screen { background:#000; display:flex; align-items:center;
     justify-content:center; max-height:60vh; }
   .player-screen canvas { max-width:100%; max-height:60vh; display:block; }
-  .player-bar { display:flex; align-items:center; gap:8px; padding:10px 14px;
+  .player-bar { display:flex; align-items:center; gap:6px; padding:10px 14px;
     background: var(--card-background-color); flex-wrap:wrap; }
-  .rates { display:flex; gap:4px; margin-left:8px; }
-  .rate.active { background: var(--primary-color); color: var(--text-primary-color,#fff);
-    border-color: var(--primary-color); }
+  /* Every mark in the bar is a 16px box, so the buttons are square and equal
+     however wide the glyph inside happens to be. */
+  button.icon { display:flex; align-items:center; justify-content:center;
+    line-height:1; padding:7px; }
+  button.icon svg { display:block; }
+  /* The speeds are one control, not four buttons: joined, with only the seams
+     between them, so the row reads left to right as a scale. */
+  .rates { display:flex; margin-left:8px; border-radius:8px; overflow:hidden;
+    border:1px solid var(--divider-color); }
+  .rates .rate { border:0; border-radius:0; padding:7px 11px; font-size:13px;
+    font-variant-numeric: tabular-nums; }
+  .rates .rate + .rate { border-left:1px solid var(--divider-color); }
+  .rate.active { background: var(--primary-color); color: var(--text-primary-color,#fff); }
   .player-time { margin-left:auto; font-family: ui-monospace, Menlo, monospace;
-    font-size:13px; color: var(--secondary-text-color); }
+    font-size:13px; color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums; }
 
   /* Timeline cursor */
-  .cursor { position:absolute; top:-3px; bottom:-3px; width:2px; z-index:2;
-    background: var(--primary-text-color); box-shadow:0 0 0 1px rgba(0,0,0,.4); }
+  .cursor { position:absolute; top:-3px; bottom:-3px; width:2px; z-index:3;
+    background: var(--primary-text-color); box-shadow:0 0 0 1px rgba(0,0,0,.4);
+    pointer-events:none; }
   .cursor::before { content:""; position:absolute; top:-4px; left:-4px;
     border:5px solid transparent; border-top-color: var(--primary-text-color); }
-  .track { cursor: crosshair; }
   .tile { padding:0; overflow:hidden; cursor:pointer; transition: transform .12s ease; }
   .tile:hover { transform: translateY(-2px); }
   .tile.offline { opacity:.55; }
@@ -3712,6 +4003,17 @@ const STYLES = `
   select, input[type=date] { padding:8px 10px; border-radius:8px; font-size:14px;
     border:1px solid var(--divider-color); background: var(--card-background-color);
     color: var(--primary-text-color); font-family:inherit; }
+
+  /* The day and its two arrows are one control: a single frame with seams,
+     rather than three loose boxes of three different heights. */
+  .daypick { display:flex; align-items:stretch; border-radius:8px; overflow:hidden;
+    border:1px solid var(--divider-color); background: var(--card-background-color); }
+  .daypick input[type=date] { border:0; border-radius:0; background:transparent;
+    padding:8px 6px; font-variant-numeric: tabular-nums; }
+  .daypick .step { border:0; border-radius:0; padding:0 9px;
+    color: var(--secondary-text-color); }
+  .daypick .step:hover { color: var(--primary-text-color);
+    background: var(--secondary-background-color); }
   button.primary { background: var(--primary-color); color: var(--text-primary-color, #fff);
     border:none; border-radius:8px; padding:9px 18px; cursor:pointer; font-size:14px;
     font-family:inherit; }
@@ -3728,13 +4030,24 @@ const STYLES = `
   tr.dim { opacity:.5; }
   .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px; }
 
-  .timeline { position:relative; padding-bottom:22px; }
-  .track { position:relative; height:44px; background: var(--secondary-background-color);
-    border-radius:6px; overflow:hidden; }
+  .timeline { position:relative; }
+  /* The bar takes the wheel, so the page must not also scroll under it. */
+  .track { position:relative; height:52px; background: var(--secondary-background-color);
+    border-radius:8px; overflow:hidden; touch-action:none; cursor:crosshair;
+    user-select:none; }
+  .track:active { cursor:grabbing; }
+  .blocks { position:absolute; inset:0; }
   .block { position:absolute; top:0; height:100%; min-width:1px; }
-  .hours { position:relative; height:16px; margin-top:4px; }
-  .hours span { position:absolute; transform:translateX(-50%); font-size:11px;
-    color: var(--secondary-text-color); }
+  .ruler { position:relative; height:18px; margin-top:5px; }
+  .ruler span { position:absolute; font-size:11px;
+    color: var(--secondary-text-color); white-space:nowrap;
+    font-variant-numeric: tabular-nums; }
+  .timeline-foot { display:flex; align-items:center; gap:12px; margin-top:8px;
+    flex-wrap:wrap; }
+  .timeline-foot .hint { margin:0; }
+  .zoom { margin-left:auto; display:flex; align-items:center; gap:6px; }
+  .zoom-span { font-size:12px; color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums; }
   .legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:14px; }
   .chip { display:inline-flex; align-items:center; gap:6px; font-size:13px;
     color: var(--secondary-text-color); }

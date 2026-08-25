@@ -198,6 +198,38 @@ smaller stream and then to snapshots rather than showing a black screen.
 Click the timeline to play from that moment. The cursor follows the frame
 currently on screen. There is pause, ±10 s stepping, and speeds from ×1 to ×8.
 
+### The bar zooms
+
+A day across a bar is about a minute per pixel, and recordings here are often
+twenty seconds long: at that scale the recording you want is thinner than the
+pointer, and clicking it is guesswork. So the bar zooms — the wheel about the
+pointer, keeping the moment under it in place, down to a minute across the
+width. Dragging moves the view, and a press is told from a drag by whether the
+pointer travelled: a bar that pans on every press cannot be clicked, and one
+that cannot be panned is useless once it is zoomed past a screenful.
+
+The ruler follows, choosing the largest step that still leaves about a dozen
+marks — six hours down to one second — so the labels stay equally dense however
+far in the view is. The right-hand edge of a whole-day view is named 24:00
+rather than 00:00, which would read as the day starting over.
+
+The bar is redrawn rather than transformed. A CSS scale would stretch the cursor
+and the hairline of a short recording along with everything else, would leave
+the ruler to be recomputed anyway, and would keep seven hundred elements in the
+document when forty are on screen. Only what falls inside the window is built,
+so zooming in makes the redraw cheaper rather than dearer — and it is the bar
+that is redrawn, not the page, because rebuilding the tab would replace the
+canvas the player is drawing into and restart playback on every wheel notch.
+
+While playing, the window follows the cursor: at any zoom past the whole day
+playback would otherwise run off the right-hand edge within seconds.
+
+The controls are drawn marks in the same 16 px box as the wall's layout icons.
+They were typed characters — ▶ ⏸ ⏪ ⏩ ✕ — and a typed character is sized by
+whichever font answers for it, so five buttons in a row came out five heights.
+The speeds are one joined control rather than four separate buttons, and the day
+picker is one frame holding the date between a previous and a next day.
+
 ### Time, which the recorder mostly does not send
 
 The recorder stamps keyframes only, and only to the second. Twenty-four frames
