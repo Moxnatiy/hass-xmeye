@@ -9,9 +9,11 @@ import struct
 
 import pytest
 
+from xmeye import protocol
 from xmeye.const import HEADER_SIZE, MAGIC, Msg
 from xmeye.exceptions import DeviceSilent, NotConnected
 from xmeye.protocol import (
+    DROP_REPORT_INTERVAL,
     DvripConnection,
     Packet,
     build_packet,
@@ -409,17 +411,54 @@ async def test_media_before_enabling_is_still_a_mistake() -> None:
         await conn.next_media()
 
 
-def test_dropping_is_reported_at_most_once_an_interval(caplog) -> None:
+def _said(caplog) -> list:
+    return [record for record in caplog.records if "behind" in record.message]
+
+
+def test_dropping_is_reported_at_most_once_an_interval(caplog, monkeypatch) -> None:
     """The log line is throttled by time, not by a count of drops.
 
     Every hundredth drop sounds sparse until a stuck 20-frames-a-second stream
-    runs for six days.
+    runs for six days: 444,512 lines, which is what brought this here.
+
+    On a clock we move ourselves, so the windows are exact rather than whatever
+    the test machine happened to take.
     """
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(protocol.time, "monotonic", lambda: clock["now"])
+
     conn = DvripConnection(host="127.0.0.1")
     conn.enable_media(maxsize=2)
     with caplog.at_level(logging.WARNING, logger="xmeye.protocol"):
         _fill_media(conn, 5000)
+        assert len(_said(caplog)) == 1, "the first drop is the one worth reporting"
 
-    said = [r for r in caplog.records if "behind" in r.message]
-    assert conn.dropped_media > 4000, "drops were meant to happen"
-    assert len(said) == 1, f"one warning expected in the window, got {len(said)}"
+        clock["now"] += DROP_REPORT_INTERVAL / 2
+        _fill_media(conn, 5000)
+        assert len(_said(caplog)) == 1, "still inside the same window"
+
+        clock["now"] += DROP_REPORT_INTERVAL
+        _fill_media(conn, 10)
+
+    assert conn.dropped_media > 9000, "drops were meant to happen"
+    assert len(_said(caplog)) == 2, "one line per window, not one per hundred drops"
+
+
+def test_the_first_report_does_not_wait_for_the_host_to_be_up_a_minute(
+    caplog, monkeypatch
+) -> None:
+    """"Nothing said yet" cannot be written as zero.
+
+    ``monotonic`` counts from boot, so on a machine that has just started, zero
+    is a time less than an interval ago and the first report — the one worth
+    having — was swallowed. Found by CI, whose runners are always freshly
+    booted, on a fix whose own tests passed on a laptop with weeks of uptime.
+    """
+    monkeypatch.setattr(protocol.time, "monotonic", lambda: 0.5)
+
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=2)
+    with caplog.at_level(logging.WARNING, logger="xmeye.protocol"):
+        _fill_media(conn, 20)
+
+    assert _said(caplog), "half a second after boot, the first drop went unreported"

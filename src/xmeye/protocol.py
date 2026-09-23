@@ -161,7 +161,7 @@ class DvripConnection:
     _desynced: bool = field(default=False, repr=False)
     #: How many media packets had to be dropped because the consumer lagged.
     dropped_media: int = field(default=0, repr=False)
-    _dropped_said_at: float = field(default=0.0, repr=False)
+    _dropped_said_at: float | None = field(default=None, repr=False)
     _dropped_said: int = field(default=0, repr=False)
     #: Whether media was ever collected on this connection, which is what tells
     #: "the stream has ended" from "you never started one".
@@ -297,14 +297,19 @@ class DvripConnection:
                     pass
                 self.dropped_media += 1
                 now = time.monotonic()
-                if now - self._dropped_said_at >= DROP_REPORT_INTERVAL:
-                    since = self.dropped_media - self._dropped_said
+                # "Never said anything yet" is None rather than zero, because
+                # monotonic() counts from boot: on a machine that has just
+                # started, zero is a time less than an interval ago, and the
+                # first report — the one worth having — was swallowed. Caught by
+                # CI, whose runners are always freshly booted.
+                said_at = self._dropped_said_at
+                if said_at is None or now - said_at >= DROP_REPORT_INTERVAL:
                     _LOGGER.warning(
                         "Media consumer on %s is behind: %d packets dropped in the "
                         "last %.0fs, %d since the stream started",
                         self.host,
-                        since,
-                        now - self._dropped_said_at if self._dropped_said_at else 0.0,
+                        self.dropped_media - self._dropped_said,
+                        0.0 if said_at is None else now - said_at,
                         self.dropped_media,
                     )
                     self._dropped_said_at = now
@@ -413,7 +418,7 @@ class DvripConnection:
         self._media_queue = asyncio.Queue(maxsize=maxsize)
         self._media_seen = True
         self.dropped_media = 0
-        self._dropped_said_at = 0.0
+        self._dropped_said_at = None
         self._dropped_said = 0
 
     def _end_media(self) -> None:
