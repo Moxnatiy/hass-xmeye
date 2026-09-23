@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import struct
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -125,6 +126,14 @@ class _Pending:
     future: asyncio.Future[Packet]
 
 
+#: How often a lagging media consumer may be complained about, in seconds.
+#: Dropping the oldest packet is the designed response to a brief stall — for
+#: live video a fresh frame beats a stale one — so the first word is useful and
+#: the next thousand are not. A line every hundred drops produced 444,512
+#: warnings in six days from sessions that were never going to recover.
+DROP_REPORT_INTERVAL = 60.0
+
+
 @dataclass
 class DvripConnection:
     """An asynchronous connection to the device.
@@ -152,6 +161,11 @@ class DvripConnection:
     _desynced: bool = field(default=False, repr=False)
     #: How many media packets had to be dropped because the consumer lagged.
     dropped_media: int = field(default=0, repr=False)
+    _dropped_said_at: float = field(default=0.0, repr=False)
+    _dropped_said: int = field(default=0, repr=False)
+    #: Whether media was ever collected on this connection, which is what tells
+    #: "the stream has ended" from "you never started one".
+    _media_seen: bool = field(default=False, repr=False)
 
     @property
     def connected(self) -> bool:
@@ -203,8 +217,7 @@ class DvripConnection:
                 pass
         self._reader = self._writer = None
         self._fail_pending(NotConnected("Connection closed"))
-        if self._media_queue is not None:
-            self._media_queue.put_nowait(None)
+        self._end_media()
 
     # ------------------------------------------------------------------
     # Reading
@@ -243,8 +256,7 @@ class DvripConnection:
             if not self._closing:
                 _LOGGER.debug("Connection to %s dropped: %s", self.host, err)
             self._fail_pending(ConnectionFailed(f"Connection dropped: {err}"))
-            if self._media_queue is not None:
-                self._media_queue.put_nowait(None)
+            self._end_media()
         except ProtocolError as err:
             _LOGGER.warning("Protocol error from %s: %s", self.host, err)
             self._fail_pending(err)
@@ -284,10 +296,19 @@ class DvripConnection:
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     pass
                 self.dropped_media += 1
-                if self.dropped_media % 100 == 1:
+                now = time.monotonic()
+                if now - self._dropped_said_at >= DROP_REPORT_INTERVAL:
+                    since = self.dropped_media - self._dropped_said
                     _LOGGER.warning(
-                        "Media consumer is behind, packets dropped: %d", self.dropped_media
+                        "Media consumer on %s is behind: %d packets dropped in the "
+                        "last %.0fs, %d since the stream started",
+                        self.host,
+                        since,
+                        now - self._dropped_said_at if self._dropped_said_at else 0.0,
+                        self.dropped_media,
                     )
+                    self._dropped_said_at = now
+                    self._dropped_said = self.dropped_media
             return
 
         if packet.msgid in UNSOLICITED or self.on_event is not None:
@@ -390,12 +411,47 @@ class DvripConnection:
         packets are lost.
         """
         self._media_queue = asyncio.Queue(maxsize=maxsize)
+        self._media_seen = True
         self.dropped_media = 0
+        self._dropped_said_at = 0.0
+        self._dropped_said = 0
+
+    def _end_media(self) -> None:
+        """Push the end-of-stream sentinel, whatever state the queue is in.
+
+        ``put_nowait`` raises on a full queue, and a full queue is exactly the
+        state this is reached in when a consumer has stalled. Every caller here
+        is winding something down, and none of them can afford to raise:
+        :meth:`disable_media` runs *before* the socket close in
+        ``_MediaSession.close``, so a raise there skipped the close and left the
+        connection open, still receiving, still dropping — one stall became six
+        days of warnings from a session nothing could reach any more.
+
+        The sentinel is the only thing still worth delivering, so a packet is
+        thrown away to make room for it.
+        """
+        queue = self._media_queue
+        if queue is None:
+            return
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+                queue.put_nowait(None)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):  # pragma: no cover - racing
+                pass
 
     def disable_media(self) -> None:
-        """Stop collecting media packets and wake the reader."""
-        if self._media_queue is not None:
-            self._media_queue.put_nowait(None)
+        """Stop collecting media packets and wake the reader.
+
+        The queue is released as well as drained. Leaving it in place meant the
+        reader went on filling a queue nobody was left to empty, counting every
+        packet as a "consumer is behind" drop for as long as the connection
+        lived.
+        """
+        self._end_media()
+        self._media_queue = None
 
     async def next_media(self, timeout: float | None = None) -> Packet | None:
         """Wait for the next media packet.
@@ -404,6 +460,11 @@ class DvripConnection:
         """
         queue = self._media_queue
         if queue is None:
+            # Releasing the queue is how a stream ends now, so a caller that
+            # asks once more gets the end of the stream rather than an error.
+            # Never having enabled media at all is still a mistake worth saying.
+            if self._media_seen:
+                return None
             raise NotConnected("Call enable_media() first")
         if timeout is None:
             return await queue.get()

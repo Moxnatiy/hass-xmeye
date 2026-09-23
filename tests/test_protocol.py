@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import struct
 
 import pytest
@@ -323,3 +324,102 @@ async def test_client_survives_several_silent_sections(device: FakeDevice) -> No
         assert client.reconnects == 3
     finally:
         await client.close()
+
+
+# ----------------------------------------------------------------------
+# Media queue teardown
+#
+# These cover one fault with three faces, found in a user's log: 444,512
+# warnings over six days, all saying a media consumer was behind, from sessions
+# nothing could reach any more.
+# ----------------------------------------------------------------------
+
+
+def _fill_media(conn: DvripConnection, count: int) -> None:
+    """Deliver media packets straight to the dispatcher, as the reader would."""
+    for index in range(count):
+        conn._dispatch(
+            Packet(session=1, sequence=index, msgid=Msg.MONITOR_DATA, payload=b"\x00" * 8)
+        )
+
+
+def test_ending_a_full_stream_does_not_raise() -> None:
+    """``put_nowait`` raises on a full queue, which is the state this is reached in.
+
+    ``disable_media`` runs before the socket close in ``_MediaSession.close``,
+    so a raise there skipped the close: the connection stayed open, still
+    receiving, still dropping, for as long as the process lived.
+    """
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=4)
+    _fill_media(conn, 8)
+    assert conn.dropped_media, "the queue was meant to overflow"
+
+    conn.disable_media()  # must not raise
+
+
+def test_disabling_media_stops_the_dispatcher_counting_drops() -> None:
+    """A released queue must not go on being filled.
+
+    Leaving it in place meant the reader kept feeding a queue nobody was left to
+    empty, counting every packet that arrived afterwards as a consumer that was
+    behind — for the life of the connection.
+    """
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=4)
+    _fill_media(conn, 8)
+    conn.disable_media()
+
+    before = conn.dropped_media
+    _fill_media(conn, 100)
+    assert conn.dropped_media == before, "packets were still being queued and dropped"
+
+
+def test_the_end_sentinel_arrives_even_with_no_room() -> None:
+    """A waiting consumer has to learn the stream ended, full queue or not.
+
+    Asserted on the queue rather than through a reader task: the thing being
+    checked is that the sentinel is *in* there, and a test that spins up a
+    consumer to discover it proves the same point while being able to hang
+    instead of fail — which it did.
+    """
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=4)
+    _fill_media(conn, 8)
+    queue = conn._media_queue
+    assert queue is not None and queue.full(), "the queue was meant to be full"
+
+    conn.disable_media()
+
+    waiting = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert waiting[-1] is None, "the reader would have waited for a packet forever"
+
+
+async def test_asking_after_the_end_is_not_an_error() -> None:
+    """Releasing the queue is how a stream ends, so one more ask is the end."""
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=4)
+    conn.disable_media()
+    assert await conn.next_media() is None
+
+
+async def test_media_before_enabling_is_still_a_mistake() -> None:
+    conn = DvripConnection(host="127.0.0.1")
+    with pytest.raises(NotConnected):
+        await conn.next_media()
+
+
+def test_dropping_is_reported_at_most_once_an_interval(caplog) -> None:
+    """The log line is throttled by time, not by a count of drops.
+
+    Every hundredth drop sounds sparse until a stuck 20-frames-a-second stream
+    runs for six days.
+    """
+    conn = DvripConnection(host="127.0.0.1")
+    conn.enable_media(maxsize=2)
+    with caplog.at_level(logging.WARNING, logger="xmeye.protocol"):
+        _fill_media(conn, 5000)
+
+    said = [r for r in caplog.records if "behind" in r.message]
+    assert conn.dropped_media > 4000, "drops were meant to happen"
+    assert len(said) == 1, f"one warning expected in the window, got {len(said)}"

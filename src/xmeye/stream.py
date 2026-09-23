@@ -66,9 +66,14 @@ class _MediaSession:
         return reply
 
     async def close(self) -> None:
-        self._conn.disable_media()
-        await self._conn.close()
-        self._started = False
+        # The socket is closed whatever happens on the way there. A session that
+        # fails to close keeps its slot — the recorder gives out about ten — and
+        # keeps receiving video nobody reads.
+        try:
+            self._conn.disable_media()
+        finally:
+            await self._conn.close()
+            self._started = False
 
     async def __aenter__(self) -> Self:
         await self.start()
