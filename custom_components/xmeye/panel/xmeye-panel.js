@@ -2693,29 +2693,80 @@ class XmeyePanel extends HTMLElement {
       { passive: false }
     );
 
+    // A second finger joining turns the gesture into a pinch: panning stops
+    // and the two touches' spread drives the same zoom the wheel uses. One
+    // finger lifting out of a pinch resumes panning from that finger's
+    // current spot, rather than the stale place it went down.
     let press = null;
+    const pointers = new Map();
+    let pinch = null;
+    const pinchSpread = () => {
+      const [a, b] = [...pointers.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+    const startPress = (pointerId) => {
+      const p = pointers.get(pointerId);
+      press = { x: p.x, fraction: fractionAt({ clientX: p.x }), moved: false };
+    };
+
     track.addEventListener("pointerdown", (event) => {
-      press = { x: event.clientX, fraction: fractionAt(event), moved: false };
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       track.setPointerCapture(event.pointerId);
+      if (pointers.size >= 2) {
+        press = null;
+        pinch = { distance: pinchSpread() };
+      } else {
+        startPress(event.pointerId);
+      }
     });
     track.addEventListener("pointermove", (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      if (pointers.size >= 2 && pinch) {
+        const [a, b] = [...pointers.values()];
+        const distance = pinchSpread();
+        if (distance > 0 && pinch.distance > 0) {
+          this._zoomTimeline(fractionAt({ clientX: (a.x + b.x) / 2 }), distance / pinch.distance);
+        }
+        pinch.distance = distance;
+        return;
+      }
+
       if (!press) return;
       if (!press.moved && Math.abs(event.clientX - press.x) < DRAG_SLOP) return;
       press.moved = true;
       this._panTimeline((event.clientX - press.x) / track.getBoundingClientRect().width);
       press.x = event.clientX;
     });
-    track.addEventListener("pointerup", (event) => {
-      if (!press) return;
-      const { moved, fraction } = press;
-      press = null;
+    const lift = (event) => {
+      const had = pointers.delete(event.pointerId);
       if (track.hasPointerCapture(event.pointerId))
         track.releasePointerCapture(event.pointerId);
-      if (moved) return;
-      const { from, span } = this._timeSpan();
-      this._startPlayback(new Date(from + fraction * span));
-    });
+      if (!had) return;
+
+      if (pointers.size >= 2) {
+        pinch = { distance: pinchSpread() };
+        return;
+      }
+      pinch = null;
+
+      if (pointers.size === 1) {
+        startPress(pointers.keys().next().value);
+        return;
+      }
+
+      if (press && !press.moved) {
+        const { fraction } = press;
+        const { from, span } = this._timeSpan();
+        this._startPlayback(new Date(from + fraction * span));
+      }
+      press = null;
+    };
+    track.addEventListener("pointerup", lift);
     track.addEventListener("pointercancel", () => {
+      pointers.clear();
+      pinch = null;
       press = null;
     });
 
