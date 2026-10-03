@@ -38,7 +38,7 @@ so everything stays on your network.
   browser's hardware decoder through WebCodecs — no segmenting, no repackaging,
   and no work for Home Assistant beyond moving bytes.
 - **An archive you can actually aim at.** A day's recordings on a timeline that
-  **zooms down to a minute** with the scroll wheel. A click starts playback **at
+  **zooms down to a minute** with the scroll wheel or a pinch. A click starts playback **at
   that exact second**, ×1 to ×8, and the buttons **jump from one event to the
   next** — motion starting, motion ending.
 - **The recorder's settings, as a form.** Motion, blind and video-loss detection

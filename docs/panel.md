@@ -265,6 +265,13 @@ width. Dragging moves the view, and a press is told from a drag by whether the
 pointer travelled: a bar that pans on every press cannot be clicked, and one
 that cannot be panned is useless once it is zoomed past a screenful.
 
+On a touch screen a second finger turns the gesture into a pinch, zooming about
+the midpoint between the two by however much their spread changes — the same
+zoom the wheel drives. When one finger lifts, the other carries on panning from
+where it is now rather than from where it first went down, so nothing jumps.
+And that leftover finger never counts as a tap: lifting it would otherwise start
+playback at the end of every pinch. Contributed by @lucasmesty.
+
 The ruler follows, choosing the largest step that still leaves about a dozen
 marks — six hours down to one second — so the labels stay equally dense however
 far in the view is. The right-hand edge of a whole-day view is named 24:00

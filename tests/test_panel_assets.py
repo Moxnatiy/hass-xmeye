@@ -273,3 +273,25 @@ def test_hiding_the_list_does_not_redraw_the_wall() -> None:
         if inside and ("this._render()" in line or "_reflowWall()" in line):
             offenders.append(number)
     assert not offenders, f"_togglePicker redraws the wall at lines {offenders}"
+
+
+def test_a_pinch_never_ends_in_a_seek() -> None:
+    """The finger left over from a pinch may pan, but lifting it is not a tap.
+
+    The first version of pinch-to-zoom gave that finger a fresh press with
+    ``moved`` false, so lifting it without dragging counted as a tap and started
+    playback wherever it rested. On a phone that is nearly every pinch — two
+    fingers spread, both lift, and the archive jumps. Measured with synthetic
+    touches before the fix: one seek per pinch; after it, none.
+    """
+    source = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8")
+    bind = re.search(r"\n  _bindTimeline\(root\) \{(.*?)\n  \}\n", source, re.S)
+    assert bind, "_bindTimeline is gone; this test needs updating"
+    branch = re.search(
+        r"if \(pointers\.size === 1\) \{(.*?)\n\s*return;", bind.group(1), re.S
+    )
+    assert branch, "the pinch-dissolves-to-one-finger branch is gone"
+    assert "press.moved = true" in branch.group(1), (
+        "a finger left over from a pinch starts a press that can still count as "
+        "a tap, so lifting it after a pinch seeks"
+    )
