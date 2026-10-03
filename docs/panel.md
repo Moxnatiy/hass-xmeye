@@ -27,8 +27,8 @@ between builds — was being cut off.
 
 **Overview** — the video wall, plus the recorder's figures in the header.
 
-**Channels** — a grid of cards with live thumbnails, refreshed every ten
-seconds, and per-channel state. Clicking a card opens the viewer.
+**Channels** — every channel in a table: state, resolution, bitrate, whether it
+is recording and whether it sees motion. The live pictures are on the wall.
 
 **Archive** — a day timeline with recordings coloured by event, and the archive
 player.

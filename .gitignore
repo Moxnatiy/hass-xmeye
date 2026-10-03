@@ -20,5 +20,8 @@ capabilities.json
 *.h265
 *.mp4
 *.jpg
+# ...except the README's screenshots, which are staged with placeholder art in
+# place of every camera picture. Anything real stays caught by the rule above.
+!docs/images/*.jpg
 
 .DS_Store
