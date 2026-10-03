@@ -145,6 +145,23 @@ const fitIcon = () =>
   mark('<path d="M1.8 8h12.4"/><path d="M4.6 5.2 1.8 8l2.8 2.8"/>' +
        '<path d="M11.4 5.2 14.2 8l-2.8 2.8"/>');
 
+//: The device details behind the title: an "i" in a ring, the mark every
+//: system screen uses for "there is more here if you want it".
+const infoIcon = () =>
+  mark('<circle cx="8" cy="8" r="6.4"/><path d="M8 7.3v4"/><path d="M8 4.7v.01"/>');
+
+//: The channel list. Lettered rather than drawn, because the user asked for
+//: exactly that and because no picture of "a list of cameras" says it faster
+//: than CH does. The letters sit in a frame so the mark has the same weight as
+//: the solid layout grids beside it; bare letters would read as a label.
+const channelsIcon = () =>
+  `<svg viewBox="0 0 ${ICON} ${ICON}" width="${ICON}" height="${ICON}" aria-hidden="true">` +
+  `<rect x="0.8" y="2.3" width="14.4" height="11.4" rx="2" fill="none"` +
+  ` stroke="currentColor" stroke-width="1.4"/>` +
+  `<text x="8" y="11.05" text-anchor="middle" fill="currentColor" font-size="8"` +
+  ` font-weight="700" letter-spacing="-0.2"` +
+  ` font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">CH</text></svg>`;
+
 const prevIcon = () => mark('<path d="M10 3.4 5.4 8l4.6 4.6"/>');
 
 const nextIcon = () => mark('<path d="M6 3.4 10.6 8 6 12.6"/>');
@@ -672,6 +689,16 @@ class XmeyePanel extends HTMLElement {
     this._nativeSocket = null;
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
+    //: Whether the channel list sits beside the wall. Shown unless someone has
+    //: put it away: a first visit with no list would leave no way to see which
+    //: cameras the wall can hold.
+    this._pickerShown = (() => {
+      try {
+        return localStorage.getItem("xmeye-picker") !== "0";
+      } catch (err) {
+        return true;
+      }
+    })();
     this._wallPage = 0;
     //: Archive playback state. The player object is deliberately NOT `_player`:
     //: that field holds the live playback method, and one field serving both
@@ -732,10 +759,30 @@ class XmeyePanel extends HTMLElement {
     }
     if (first) this._bootstrap();
     else if (this._detail) this._renderIfIdle();
+    if (this._menuButton) this._menuButton.hass = hass;
   }
 
   set narrow(value) {
     this._narrow = value;
+    this._mountMenuButton();
+  }
+
+  /**
+   * Home Assistant's own menu button, in the bar at the top.
+   *
+   * Its element, not a lookalike: it decides for itself when to show — on a
+   * phone, in a narrow window, or when the sidebar is set to hide — and opens
+   * the sidebar the same way every other panel's does. Created once and moved
+   * back into each redraw, because the redraw replaces the markup wholesale and
+   * a fresh element each time would lose the state Home Assistant keeps on it.
+   */
+  _mountMenuButton() {
+    const slot = this.shadowRoot && this.shadowRoot.getElementById("menuslot");
+    if (!slot) return;
+    if (!this._menuButton) this._menuButton = document.createElement("ha-menu-button");
+    this._menuButton.hass = this._hass;
+    this._menuButton.narrow = this._narrow;
+    if (this._menuButton.parentNode !== slot) slot.appendChild(this._menuButton);
   }
 
   connectedCallback() {
@@ -1281,6 +1328,9 @@ class XmeyePanel extends HTMLElement {
     const full = root.getElementById("wallfull");
     if (full) full.addEventListener("click", () => this._toggleWallFullscreen());
 
+    const toggle = root.getElementById("pickertoggle");
+    if (toggle) toggle.addEventListener("click", () => this._togglePicker());
+
     const prev = root.getElementById("wallprev");
     if (prev)
       prev.addEventListener("click", () => {
@@ -1516,6 +1566,7 @@ class XmeyePanel extends HTMLElement {
 
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${this._template()}`;
     this._bind();
+    this._mountMenuButton();
 
     if (this._tab !== "overview" || !this._detail || this._live !== null) {
       this._noteDiag("redraw", `tab ${this._tab}${why ? `, ${why}` : ""}`);
@@ -1579,16 +1630,34 @@ class XmeyePanel extends HTMLElement {
             .join("")}</select>`
         : "";
 
+    // The bar every system screen has: Home Assistant's menu button, then the
+    // title. Without it a phone or a narrow window has no way back to the
+    // sidebar at all — Home Assistant hides the sidebar there and expects the
+    // panel to offer the button, which this one never did.
+    //
+    // The address and firmware go behind an "i" next to the title. They are
+    // read once, when filing a bug, and they were a long grey line under the
+    // name on every visit.
+    const details = d
+      ? `<span class="info">
+           <button class="ghost icon" aria-describedby="devicetip"
+                   aria-label="${t("Device details")}">${infoIcon()}</button>
+           <span class="tip" id="devicetip" role="tooltip">
+             <span class="tip-row">${escapeHtml(d.host)}</span>
+             <span class="tip-row mono">${escapeHtml(d.device.firmware || "")}</span>
+           </span>
+         </span>`
+      : "";
+
     return `
+      <div class="appbar">
+        <span class="menu-slot" id="menuslot"></span>
+        <h1 class="title">${escapeHtml(d ? d.device.model || d.title : "XMeye")}</h1>
+        ${details}
+        <span class="appbar-end">${picker}</span>
+      </div>
       <div class="page">
-        <header>
-          <div class="ident">
-            <h1>${d ? d.device.model || d.title : "XMeye"}</h1>
-            <div class="sub">${d ? `${d.host} · ${d.device.firmware}` : ""}</div>
-          </div>
-          ${d ? this._headerFacts(d) : ""}
-          ${picker}
-        </header>
+        ${d ? `<header>${this._headerFacts(d)}</header>` : ""}
         <nav>
           ${tabs
             .map(
@@ -1649,7 +1718,7 @@ class XmeyePanel extends HTMLElement {
     const plan = this._wallPlan();
     return `
       ${this._wallBar(plan)}
-      <div class="wall-layout">
+      <div class="wall-layout ${this._pickerShown ? "" : "picker-hidden"}">
         ${this._wallPicker(plan.sequence)}
         <div class="wall" style="--columns:${plan.layout.columns};--rows:${plan.layout.rows}">
           ${this._wallCells(plan)}
@@ -1683,6 +1752,10 @@ class XmeyePanel extends HTMLElement {
     return `
       <div class="toolbar wall-bar">
         <div class="layouts">
+          <button class="ghost picker-toggle ${this._pickerShown ? "active" : ""}"
+                  id="pickertoggle" aria-pressed="${this._pickerShown}"
+                  title="${t("Wall channels")}">${channelsIcon()}</button>
+          <span class="bar-gap"></span>
           ${LAYOUTS.map(
             (l) =>
               `<button class="ghost layout ${l.id === this._layout ? "active" : ""}"
@@ -1706,6 +1779,31 @@ class XmeyePanel extends HTMLElement {
         <button class="ghost wall-full" id="wallfull"
                 title="${t("Fullscreen (Esc to leave)")}">${fullscreenIcon()}</button>
       </div>`;
+  }
+
+  /**
+   * Show or hide the channel list beside the wall.
+   *
+   * A class on the container, not a redraw: the same reason fullscreen hides
+   * the list by CSS. Taking it out of the markup would rebuild the cells, and
+   * while the canvases survive a rebuild, there is no reason to put them
+   * through one for something this small. The wall simply takes the width.
+   */
+  _togglePicker() {
+    this._pickerShown = !this._pickerShown;
+    try {
+      localStorage.setItem("xmeye-picker", this._pickerShown ? "1" : "0");
+    } catch (err) {
+      /* a private window may refuse; the choice then lasts the visit */
+    }
+    const root = this.shadowRoot;
+    const layout = root.querySelector(".wall-layout");
+    if (layout) layout.classList.toggle("picker-hidden", !this._pickerShown);
+    const toggle = root.getElementById("pickertoggle");
+    if (toggle) {
+      toggle.classList.toggle("active", this._pickerShown);
+      toggle.setAttribute("aria-pressed", String(this._pickerShown));
+    }
   }
 
   /**
@@ -3914,12 +4012,57 @@ const STYLES = `
   .page { padding: 16px 24px 48px; max-width: 1600px; margin: 0 auto;
           color: var(--primary-text-color);
           font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
+  /* The bar every system screen has. Home Assistant's own variables, so it
+     follows the theme the way the Energy and History screens do, and sticky so
+     the menu stays in reach down a long archive list. */
+  .appbar { display:flex; align-items:center; gap:2px; position:sticky; top:0; z-index:5;
+    height: var(--header-height, 56px); box-sizing:border-box; padding:0 12px 0 4px;
+    background: var(--app-header-background-color, var(--primary-background-color));
+    color: var(--app-header-text-color, var(--primary-text-color));
+    border-bottom: var(--app-header-border-bottom, 1px solid var(--divider-color));
+    font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
+  /* Empty, and so taking no room, whenever Home Assistant decides the sidebar
+     is already on screen; the title then lines up with the content below. */
+  .menu-slot { display:flex; align-items:center; }
+  .menu-slot:empty { width:12px; }
+  .appbar .title { font-size:20px; font-weight:400; margin:0 4px 0 8px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .appbar-end { margin-left:auto; display:flex; align-items:center; }
+  /* Borderless and round, like Home Assistant's own icon buttons in the same
+     bar — a framed button there reads as a form control. */
+  .appbar button.icon { color: inherit; opacity:.7; border:0; background:none;
+    border-radius:50%; padding:9px; }
+  .appbar button.icon:hover, .appbar button.icon:focus-visible { opacity:1;
+    background: color-mix(in srgb, currentColor 10%, transparent); }
+
+  /* The address and firmware, behind the "i". Shown on hover and on focus —
+     focus because a phone has no hover, and a tap focuses the button. */
+  .info { position:relative; display:inline-flex; }
+  .info .tip { display:none; position:absolute; top:calc(100% + 6px); left:-4px; z-index:6;
+    padding:8px 11px; border-radius:8px; font-size:13px; line-height:1.5;
+    max-width: calc(100vw - 32px); white-space:nowrap;
+    background: var(--card-background-color); color: var(--primary-text-color);
+    border:1px solid var(--divider-color); box-shadow:0 4px 14px rgba(0,0,0,.25); }
+  .info:hover .tip, .info:focus-within .tip { display:block; }
+  .tip-row { display:block; overflow:hidden; text-overflow:ellipsis; }
+  /* On a phone the "i" sits a third of the way across and the firmware string
+     is longer than what is left, so the tip hung off the right-hand edge with
+     the end of the version cut away — the part that differs between builds.
+     There it spans the bar instead, and the version wraps rather than vanishes. */
+  @media (max-width: 600px) {
+    .info { position:static; }
+    .info .tip { left:12px; right:12px; top:calc(100% - 2px); max-width:none;
+      white-space:normal; }
+    .tip-row { overflow:visible; overflow-wrap:anywhere; }
+  }
+  .tip-row.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;
+    color: var(--secondary-text-color); }
+
   header { display:flex; align-items:center; gap:24px; flex-wrap:wrap;
-           padding: 10px 0 14px; }
-  .ident h1 { margin:0; }
-  /* Facts beside the title: the same numbers the six cards carried, without
-     half a screen spent on them and without repeating the model. */
-  .facts { display:flex; gap:28px; flex-wrap:wrap; margin-left:auto; }
+           padding: 4px 0 14px; }
+  /* The recorder's figures, on their own row now that the title has moved up
+     into the bar. */
+  .facts { display:flex; gap:28px; flex-wrap:wrap; }
   .fact-label { font-size:11px; text-transform:uppercase; letter-spacing:.5px;
     color: var(--secondary-text-color); }
   .fact-value { font-size:17px; margin-top:2px; }
@@ -3927,8 +4070,11 @@ const STYLES = `
   h1 { margin:0; font-size:26px; font-weight:400; }
   h2 { margin: 28px 0 12px; font-size:18px; font-weight:500; }
   .sub { color: var(--secondary-text-color); font-size:14px; margin-top:4px; }
+  /* Scrolls sideways when the tabs outrun the width, as Home Assistant's own
+     do, without drawing a scrollbar track under them on every narrow screen. */
   nav { display:flex; gap:4px; border-bottom:1px solid var(--divider-color); margin-bottom:20px;
-        overflow-x:auto; }
+        overflow-x:auto; scrollbar-width:none; }
+  nav::-webkit-scrollbar { display:none; }
   .tab { background:none; border:none; padding:12px 18px; cursor:pointer; font-size:15px;
          color: var(--secondary-text-color); border-bottom:2px solid transparent;
          white-space:nowrap; font-family:inherit; }
@@ -4038,7 +4184,17 @@ const STYLES = `
     .picker { width:100%; }
     .pick-list { max-height:none; }
   }
-  .layouts { display:flex; gap:4px; }
+  .layouts { display:flex; gap:4px; align-items:center; }
+  /* The list toggle shares the layout buttons' box and active colour, and sits
+     apart from them, because it changes what is beside the wall, not the wall. */
+  button.picker-toggle { display:flex; align-items:center; line-height:1; }
+  .picker-toggle svg { display:block; }
+  .picker-toggle.active { background: var(--primary-color);
+    color: var(--text-primary-color,#fff); border-color: var(--primary-color); }
+  .bar-gap { width:1px; align-self:stretch; margin:3px 6px;
+    background: var(--divider-color); }
+  /* Hidden, not removed — see _togglePicker. */
+  .wall-layout.picker-hidden .picker { display:none; }
   /* Same box as the fullscreen button beside them: a 16px mark inside the
      padding every ghost button has, so the toolbar is one row of one height. */
   button.layout { display:flex; align-items:center; line-height:1; }

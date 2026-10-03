@@ -7,6 +7,22 @@ external dependencies and no build step. The source lives in
 
 It can be turned off in the integration options.
 
+## The bar at the top
+
+The bar every system screen has: Home Assistant's own menu button, then the
+recorder's model as the title. The button is Home Assistant's element rather
+than a lookalike, so it decides for itself when to appear — on a phone, in a
+narrow window, or when the sidebar is set to hide — and opens the sidebar the
+way every other panel's does. Before it, a phone had no way back to the sidebar
+at all: Home Assistant hides it there and expects the panel to offer the button.
+
+The address and firmware sit behind an "i" beside the title. They are read once,
+when filing a bug, and were a long grey line under the name on every visit. The
+details show on hover and on focus, since a phone has no hover and a tap focuses
+the button; on a narrow screen they span the bar, because the firmware string is
+longer than the room to the right of the "i", and its end — the part that differs
+between builds — was being cut off.
+
 ## Tabs
 
 **Overview** — the video wall, plus the recorder's figures in the header.
@@ -64,6 +80,14 @@ dragging the row to a new position, and at the end a dropdown for that camera's
 stream. The layout, the order, the selection and the per-channel stream are
 stored per config entry in `localStorage` and survive a reload. Channels the
 recorder gains later join the end of the list.
+
+The **CH** button, first in the wall's toolbar, puts the list away and gives the
+wall its width. It is a class on the container rather than a redraw, for the
+same reason fullscreen hides the list by CSS: the cameras play straight through
+it. The choice is remembered. It sits apart from the layout buttons because it
+changes what is beside the wall, not the wall — and it must not wear their class
+either, since every `.layout` is bound to a handler that reads `data-layout` and
+this button has none.
 
 Only the grip starts a drag, since the row also holds a select and a row that is
 draggable everywhere makes that awkward to use. Reordering by drag needs a

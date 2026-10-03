@@ -234,3 +234,42 @@ def test_zooming_the_timeline_does_not_redraw_the_panel() -> None:
         f"the timeline calls this._render() from {offenders}, which rebuilds the "
         "archive player's canvas. Redraw the bar with this._drawTrack() instead."
     )
+
+
+def test_the_list_toggle_is_not_mistaken_for_a_layout() -> None:
+    """The CH button sits among the layout buttons and must not join them.
+
+    Every ``.layout`` is bound to a handler that reads ``data-layout`` and
+    makes it the wall's layout. The toggle has no such attribute, so giving it
+    the class — the obvious way to borrow the look — sets the layout to NaN on
+    the first click and the wall has no shape at all. It was written that way
+    first.
+    """
+    source = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8")
+    assert 'id="pickertoggle"' in source, "the toggle is gone; this test needs updating"
+    # Anchored on the id and read backwards to its own <button>. The class
+    # value holds a template expression with quotes of its own, which is what
+    # defeated a plain class="..." pattern — it matched nothing, and the test
+    # failed on correct code, which is no better than passing on broken code.
+    at = source.index('id="pickertoggle"')
+    tag = source[source.rindex("<button", 0, at) : at]
+    value = re.search(r'class="(.*)"', tag, re.S)
+    assert value, "the toggle has no class attribute"
+    classes = re.sub(r"\$\{[^}]*\}", "", value.group(1)).split()
+    assert "layout" not in classes, (
+        "the CH toggle carries the layout class, so the layout handler will "
+        "read its missing data-layout and set the layout to NaN"
+    )
+
+
+def test_hiding_the_list_does_not_redraw_the_wall() -> None:
+    """A class on the container, never a redraw — the cameras keep playing."""
+    lines = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8").splitlines()
+    inside, offenders = False, []
+    for number, line in enumerate(lines, 1):
+        found = re.match(r"\s{2}(?:async\s+)?(_[A-Za-z0-9]+)\(", line)
+        if found:
+            inside = found.group(1) == "_togglePicker"
+        if inside and ("this._render()" in line or "_reflowWall()" in line):
+            offenders.append(number)
+    assert not offenders, f"_togglePicker redraws the wall at lines {offenders}"
