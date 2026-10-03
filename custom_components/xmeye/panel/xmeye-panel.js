@@ -4262,6 +4262,12 @@ const STYLES = `
   .noimage { display:flex; align-items:center; justify-content:center; height:100%;
              color:#888; font-size:14px; }
   .badges { position:absolute; top:8px; left:8px; display:flex; gap:6px; }
+  /* That placement is for the channel cards, where the badges sit alone on the
+     picture. A wall tile has its name in the same corner, and the badge was
+     drawn straight over it — "recording" covering the camera it was about. In
+     a tile the badges take their place in the overlay's row instead, at the
+     far end from the name. */
+  .cell .badges { position:static; flex:none; }
   .badge { font-size:11px; padding:2px 8px; border-radius:10px; color:#fff;
            background: rgba(0,0,0,.6); }
   .badge.rec { background: var(--error-color, #f44336); }
