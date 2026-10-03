@@ -2753,6 +2753,11 @@ class XmeyePanel extends HTMLElement {
 
       if (pointers.size === 1) {
         startPress(pointers.keys().next().value);
+        // Still the same gesture. The finger left over from a pinch may pan,
+        // but lifting it is not a tap — counted as one, every pinch that ended
+        // with the fingers simply lifted started playback wherever the last
+        // finger happened to rest.
+        press.moved = true;
         return;
       }
 
