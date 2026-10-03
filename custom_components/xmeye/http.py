@@ -75,6 +75,17 @@ MUX_RETRIES = 4
 #: hammered while it recovers.
 MUX_RETRY_DELAY = 3.0
 
+#: How long a channel may wait for room in the shared queue before giving up on
+#: a keyframe. Long enough to ride out a browser that stutters, short enough
+#: that it never stops reading the recorder — which is the thing that actually
+#: breaks, because a connection nobody reads drops every packet it is sent.
+QUEUE_WAIT = 5.0
+
+#: One line per this many abandoned keyframes. A browser that has stopped
+#: reading altogether would otherwise write one every five seconds, which is the
+#: shape of problem that brought us here in the first place.
+STALL_REPORT = 20
+
 
 class XmeyePlaybackView(HomeAssistantView):
     """The channel archive over the same frame stream as live viewing.
@@ -383,6 +394,7 @@ class _VideoSession:
         announced = False
         opened = time.monotonic()
         waited = 0
+        stalled = 0
         try:
             await stream.start()
             frames = stream.frames()
@@ -444,10 +456,37 @@ class _VideoSession:
                     self.queue.put_nowait(record)
                 except asyncio.QueueFull:
                     # The browser is behind. Dropping a delta frame leaves a gap
-                    # the decoder recovers from at the next keyframe; blocking
-                    # here would hold up every other camera.
-                    if frame.keyframe:
-                        await self.queue.put(record)
+                    # the decoder recovers from at the next keyframe, so those
+                    # simply go.
+                    #
+                    # A keyframe is worth waiting a little for, because a tile
+                    # cannot start without one — but only a little. This task is
+                    # the sole reader of its recorder connection, and every
+                    # second it spends waiting here is a second nothing is read
+                    # from the device: the recorder's own queue fills, and from
+                    # then on every packet it sends is dropped. An unbounded
+                    # wait therefore does not pause a channel, it ruins it.
+                    # Measured on a user's recorder, where a browser stopped
+                    # draining and the channel kept dropping for ten days:
+                    # 19,170,855 packets on one connection.
+                    if not frame.keyframe:
+                        continue
+                    try:
+                        async with asyncio.timeout(QUEUE_WAIT):
+                            await self.queue.put(record)
+                    except TimeoutError:
+                        # Give up on the keyframe rather than on the stream. The
+                        # tile will start at the next one the browser has room
+                        # for, and meanwhile the recorder stays read.
+                        stalled += 1
+                        if stalled % STALL_REPORT == 1:
+                            _LOGGER.debug(
+                                "Channel %s: browser has not read for %.0fs, "
+                                "%d keyframes dropped",
+                                channel,
+                                QUEUE_WAIT,
+                                stalled,
+                            )
         finally:
             await stream.close()
 
@@ -490,15 +529,28 @@ class XmeyeWallSocketView(HomeAssistantView):
 
         async def pump_to_socket() -> None:
             nonlocal sent
-            while True:
-                kind, channel, flags, stamp, payload = await queue.get()
-                # Awaited, not fired and forgotten: this is where a browser that
-                # reads slowly pushes back on us, and the queue above it is what
-                # decides which frames to drop when it does.
-                await socket.send_bytes(
-                    _MUX_HEADER.pack(kind, channel, flags, len(payload), stamp) + payload
-                )
-                sent += 1
+            try:
+                while True:
+                    kind, channel, flags, stamp, payload = await queue.get()
+                    # Awaited, not fired and forgotten: this is where a browser
+                    # that reads slowly pushes back on us, and the queue above it
+                    # is what decides which frames to drop when it does.
+                    await socket.send_bytes(
+                        _MUX_HEADER.pack(kind, channel, flags, len(payload), stamp) + payload
+                    )
+                    sent += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001 - whatever a dead socket raises
+                # Nothing was watching this task. The reader below went on
+                # waiting for a message on a socket that could no longer be
+                # written to, so the channels kept filling a queue with no
+                # reader and held their recorder connections open behind it.
+                # Closing the socket ends that wait, and the wait ending is what
+                # tears the channels down.
+                _LOGGER.debug("Video socket writer for %s stopped: %s", entry_id, err)
+                debuglog.note(self.hass, "ws", f"writer stopped: {err}")
+                await socket.close()
 
         try:
             debuglog.note(self.hass, "ws", "socket opened")
