@@ -56,13 +56,22 @@ class DebugLog:
         #: a time sync mid-recording, and wall time to place the browser's.
         self.started = time.monotonic()
         self.started_epoch = time.time()
+        #: Lines waiting for the writer thread. See :meth:`_hold`.
+        self._pending: list[str] = []
+        self._writing = False
 
     def turn(self, on: bool) -> None:
         if on and not self.enabled:
             self.started = time.monotonic()
             self.started_epoch = time.time()
-            self._write([f"{'':>8} ---- log opened ----"])
+            self._hold(f"{'':>8} ---- log opened ----")
         self.enabled = on
+        self.hass.async_create_background_task(self._switch(on), name="xmeye-debuglog-switch")
+
+    async def _switch(self, on: bool) -> None:
+        await self.hass.async_add_executor_job(self._mark, on)
+
+    def _mark(self, on: bool) -> None:
         try:
             if on:
                 self.marker.touch()
@@ -75,7 +84,35 @@ class DebugLog:
         """One event. Never raises: a broken log must not break the video."""
         if not self.enabled:
             return
-        self._write([self.line(time.monotonic() - self.started, side, source, detail)])
+        self._hold(self.line(time.monotonic() - self.started, side, source, detail))
+
+    def _hold(self, line: str) -> None:
+        """Keep a line for the writer, which runs off the event loop.
+
+        Writing it here is a disk round trip inside the loop, and this is called
+        per channel per announcement with a wall running — Home Assistant
+        detects it and says so, correctly. Every line carries its own timestamp
+        and the file is sorted when it is read, so time spent in memory costs
+        nothing at all.
+
+        There is no timer. While a write is in flight the lines behind it simply
+        gather, and the writer takes whatever has arrived on its next pass: busy
+        periods coalesce into fewer, larger writes and a quiet one goes out at
+        once. Nothing to cancel when Home Assistant stops, either.
+        """
+        self._pending.append(line)
+        if self._writing:
+            return
+        self._writing = True
+        self.hass.async_create_background_task(self._drain(), name="xmeye-debuglog")
+
+    async def _drain(self) -> None:
+        try:
+            while self._pending:
+                batch, self._pending = self._pending, []
+                await self.hass.async_add_executor_job(self._write, batch)
+        finally:
+            self._writing = False
 
     def note_client(
         self, entries: list[dict], client_now: float = 0.0, client: str = ""
@@ -131,6 +168,11 @@ class DebugLog:
         return "\n".join(sorted(lines, key=when))
 
     def _write(self, lines: list[str]) -> None:
+        """The only place that touches the disk, and never from the loop.
+
+        Reached either from :meth:`_drain`'s executor job or from
+        :meth:`note_client`, which the view already hands to an executor.
+        """
         try:
             if self.path.exists() and self.path.stat().st_size > MAX_BYTES:
                 self.path.replace(self.path.with_suffix(".log.1"))
