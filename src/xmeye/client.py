@@ -14,6 +14,8 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_RTSP_PORT,
     OK_CODES,
+    PTZ_START,
+    PTZ_STOP,
     Msg,
     PtzCommand,
     Ret,
@@ -464,9 +466,18 @@ class XmeyeClient:
         channel: int = 0,
         step: int = 5,
         stop: bool = False,
-        preset: int = -1,
+        preset: int | None = None,
     ) -> dict[str, Any]:
-        """Send a PTZ command. See :class:`~xmeye.const.PtzCommand`."""
+        """Send a PTZ command. See :class:`~xmeye.const.PtzCommand`.
+
+        A movement runs from the command until the same command with
+        ``stop=True``. The two differ only in ``Preset``: 65535 to start, -1 to
+        stop. Sending -1 for both, as this method once did, answered OK and
+        never moved the camera. The preset commands put the preset's number
+        there instead, so ``preset`` takes precedence over ``stop``.
+        """
+        if preset is None:
+            preset = PTZ_STOP if stop else PTZ_START
         return await self.command(
             Msg.PTZ,
             {

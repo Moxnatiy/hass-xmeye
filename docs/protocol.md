@@ -111,6 +111,21 @@ secret, and redact it from diagnostics.
 Return codes: `100` OK, `515` operation succeeded, `203` wrong password, `607`
 no such configuration, `102` unsupported, `107` access denied.
 
+**`OPPTZControl`: start and stop share the command.** A movement
+(`DirectionLeft`, `ZoomTile`, …) runs from one message to the next with the same
+`Command`; the two differ only in `Parameter.Preset` — `65535` starts, `-1`
+stops. FunSDK's `NewPTZControlPTL` writes nothing else there, and on the
+NBD8008R-U with an ONVIF camera, `-1` alone is answered `100` and moves nothing.
+The preset commands (`GotoPreset`, `SetPreset`, `ClearPreset`) carry the
+preset's number in the same field; the recorder hands it on to an ONVIF camera
+as a preset named `Preset_003`. `Step` is the speed. The camera starts about
+0.3 s after the command.
+
+**Keyframe size on an H.264 IP channel is swapped.** The same recorder writes
+1080×1920 into the keyframe header of a 1920×1080 H.264 camera (360×640 for its
+sub stream), while a 4K H.265 camera is stated correctly. The stream's own SPS
+is right; the panel takes the size from the decoder when it is an exact swap.
+
 ## 5. Live video over DVRIP
 
 ```json

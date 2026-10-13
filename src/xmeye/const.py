@@ -260,12 +260,20 @@ class PtzCommand:
     FOCUS_FAR = "FocusFar"
     IRIS_OPEN = "IrisLarge"
     IRIS_CLOSE = "IrisSmall"
-    STOP = "DirectionUp"  # used together with Stop=True
+    STOP = "DirectionUp"  # used together with stop=True
     GOTO_PRESET = "GotoPreset"
     SET_PRESET = "SetPreset"
     CLEAR_PRESET = "ClearPreset"
     START_TOUR = "StartTour"
     STOP_TOUR = "StopTour"
+
+
+#: ``Preset`` of a movement command that starts it. The firmware reads that
+#: field as the start-or-stop flag for every command but the preset ones —
+#: FunSDK's ``NewPTZControlPTL`` writes 65535 or -1 there and nothing else.
+PTZ_START = 65535
+#: ``Preset`` of a movement command that stops it.
+PTZ_STOP = -1
 
 
 #: Root configuration containers. Reading a root returns every subsection in one
