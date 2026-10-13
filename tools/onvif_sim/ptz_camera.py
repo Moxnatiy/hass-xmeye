@@ -86,6 +86,12 @@ def operation(action: str, body: str) -> str:
     return found.group(1) if found else ""
 
 
+#: PTZ requests written to the log as they arrive.
+PTZ_LOGGED = {
+    "ContinuousMove", "Stop", "AbsoluteMove", "RelativeMove",
+    "GotoPreset", "SetPreset", "RemovePreset", "GotoHomePosition",
+}
+
 #: Prefixes IPyCam's PTZ replies use without declaring them.
 PTZ_NAMESPACE = "http://www.onvif.org/ver20/ptz/wsdl"
 
@@ -139,6 +145,17 @@ class OnvifFixes:
         }.get(name)
         if answer is not None:
             return answer()
+        if name in PTZ_LOGGED:
+            # What the recorder actually asks of the camera, which is the only
+            # way to see what it makes of the commands sent to it over DVRIP.
+            detail = " ".join(
+                f"{k}={v}" for k, v in re.findall(r'\b(x|y|space)="([^"]*)"', body)
+                if k != "space"
+            )
+            timeout = re.search(r"<(?:\w+:)?Timeout>([^<]+)<", body)
+            logging.getLogger("ptz").info(
+                "%s %s%s", name, detail, f" timeout={timeout.group(1)}" if timeout else ""
+            )
         response = self.original(name or action, body)
         if name == "GetProfiles" and response:
             response = self._with_audio(response)
@@ -306,11 +323,33 @@ class Scene:
             cv2.putText(frame, text, origin, font, 1.3, (255, 255, 255), 2, cv2.LINE_AA)
 
 
+def slow_down(ptz: object, sweep: float) -> None:
+    """Turn at the pace of a real head rather than IPyCam's.
+
+    IPyCam moves one unit a second at full speed, and pan and tilt span two, so
+    the view crossed the whole scene in two seconds. That is far faster than a
+    real pan-tilt head, and too fast to test against: a watchdog that stops the
+    camera after a second and a half could not be told apart from the end stop.
+    Every continuous move is scaled so that full speed takes ``sweep`` seconds
+    from one end to the other.
+    """
+    original = ptz.continuous_move
+    scale = 2.0 / sweep
+
+    def continuous_move(pan_speed: float = 0.0, tilt_speed: float = 0.0,
+                        zoom_speed: float = 0.0) -> None:
+        original(pan_speed * scale, tilt_speed * scale, zoom_speed * scale)
+
+    ptz.continuous_move = continuous_move
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--ip", default=None, help="address to advertise (default: the LAN one)")
     parser.add_argument("--name", default="PTZ Simulator")
     parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--sweep", type=float, default=8.0,
+                        help="seconds to pan end to end at full speed (default 8)")
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -337,6 +376,7 @@ def main() -> int:
     # IPyCam keeps the position and answers the protocol; the picture is drawn
     # here, from that position. See the module docstring for why.
     camera.ptz.enable_digital_ptz = False
+    slow_down(camera.ptz, args.sweep)
     OnvifFixes(camera.onvif)
 
     scene = Scene(config.main_width, config.main_height)
