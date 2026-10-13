@@ -560,7 +560,7 @@ const DAY_MS = 86400000;
 const MAX_ZOOM = 1440;
 
 //: Ruler steps in seconds, coarse enough to read and fine enough to land on.
-//: The largest step that still leaves a dozen marks across the window wins, so
+//: The largest step that still leaves enough marks across the window wins, so
 //: the labels stay about as dense however far in the view is.
 const RULER_STEPS = [
   1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600,
@@ -570,6 +570,12 @@ const RULER_STEPS = [
 //: drag rather than a click. Without it every seek nudges the view, because a
 //: mouse never presses and releases at exactly the same pixel.
 const DRAG_SLOP = 4;
+
+//: Room one ruler mark needs, in pixels: "00:00" at the ruler's size, and a gap
+//: wide enough to read it as a separate number. A fixed dozen marks fit a
+//: desktop and ran together into one line of digits on a phone.
+const RULER_MARK_PX = 56;
+const RULER_MARKS_MAX = 12;
 
 //: How long to wait for HLS playback to begin before calling it a failure.
 //: Home Assistant needs about thirteen seconds to bring up a stream from this
@@ -980,9 +986,12 @@ class XmeyePanel extends HTMLElement {
     if (!this._detail) return;
     const d = this._detail;
     const root = this.shadowRoot;
+    // Every match, not the first: on a phone the facts are drawn a second time
+    // inside the "i", and the copy there went stale while the hidden one ticked.
     const set = (field, value) => {
-      const el = root.querySelector(`[data-field="${field}"]`);
-      if (el && el.textContent !== String(value)) el.textContent = value;
+      root.querySelectorAll(`[data-field="${field}"]`).forEach((el) => {
+        if (el.textContent !== String(value)) el.textContent = value;
+      });
     };
     const disk = d.storage[0] && d.storage[0].partitions[0];
 
@@ -1675,7 +1684,9 @@ class XmeyePanel extends HTMLElement {
     //
     // The address and firmware go behind an "i" next to the title. They are
     // read once, when filing a bug, and they were a long grey line under the
-    // name on every visit.
+    // name on every visit. On a phone the recorder's figures join them there:
+    // two rows of them pushed the wall below the fold, and a phone is opened
+    // to look at the cameras.
     const details = d
       ? `<span class="info">
            <button class="ghost icon" aria-describedby="devicetip"
@@ -1683,6 +1694,7 @@ class XmeyePanel extends HTMLElement {
            <span class="tip" id="devicetip" role="tooltip">
              <span class="tip-row">${escapeHtml(d.host)}</span>
              <span class="tip-row mono">${escapeHtml(d.device.firmware || "")}</span>
+             <span class="tip-facts">${this._headerFacts(d)}</span>
            </span>
          </span>`
       : "";
@@ -3084,7 +3096,12 @@ class XmeyePanel extends HTMLElement {
     }
     blocks.innerHTML = drawn.join("");
 
-    const step = RULER_STEPS.find((seconds) => span / 1000 / seconds <= 12) || 21600;
+    const ruler = root.getElementById("ruler");
+    const marks = Math.max(
+      2,
+      Math.min(RULER_MARKS_MAX, Math.floor((ruler.clientWidth || 720) / RULER_MARK_PX))
+    );
+    const step = RULER_STEPS.find((seconds) => span / 1000 / seconds <= marks) || 21600;
     const stepMs = step * 1000;
     // Marks are aligned to the day rather than to the epoch, or a timezone off
     // a whole hour would put every label on a half-hour.
@@ -3105,7 +3122,7 @@ class XmeyePanel extends HTMLElement {
         `<span style="left:${share.toFixed(4)}%;transform:${align}">${name(at)}</span>`
       );
     }
-    root.getElementById("ruler").innerHTML = ticks.join("");
+    ruler.innerHTML = ticks.join("");
 
     const label = root.getElementById("zoomspan");
     if (label) label.textContent = `${name(from)} – ${name(to)}`;
@@ -3685,8 +3702,10 @@ class XmeyePanel extends HTMLElement {
                 <option value="sub" ${this._liveStream === "sub" ? "selected" : ""}>${t("Extra")}</option>
                 <option value="main" ${this._liveStream === "main" ? "selected" : ""}>${t("Main")}</option>
               </select>
-              <button class="ghost" id="diag" title="${t("Player diagnostics")}">🛈</button>
-              <button class="close" id="closelive">✕</button>
+              <button class="ghost icon" id="diag" title="${t("Player diagnostics")}"
+                      aria-label="${t("Player diagnostics")}">${infoIcon()}</button>
+              <button class="close icon" id="closelive" title="${t("Close")}"
+                      aria-label="${t("Close")}">${closeIcon()}</button>
             </div>
           </div>
           ${
@@ -4328,11 +4347,18 @@ const STYLES = `
      is longer than what is left, so the tip hung off the right-hand edge with
      the end of the version cut away — the part that differs between builds.
      There it spans the bar instead, and the version wraps rather than vanishes. */
+  .tip-facts { display:none; }
   @media (max-width: 600px) {
     .info { position:static; }
     .info .tip { left:12px; right:12px; top:calc(100% - 2px); max-width:none;
       white-space:normal; }
     .tip-row { overflow:visible; overflow-wrap:anywhere; }
+    /* The figures move into the "i" — see _shell. */
+    .page > header { display:none; }
+    .tip-facts { display:block; margin-top:8px; padding-top:10px;
+      border-top:1px solid var(--divider-color); }
+    .tip-facts .facts { gap:10px 22px; }
+    .tip-facts .fact-value { font-size:15px; }
   }
   .tip-row.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;
     color: var(--secondary-text-color); }
@@ -4459,7 +4485,11 @@ const STYLES = `
     border:1px solid var(--divider-color); border-radius:4px; }
   .pick.off .pick-stream { pointer-events:none; opacity:.6; }
   @media (max-width: 900px) {
-    .wall-layout { flex-direction:column; }
+    /* Stretched, not packed to the start: a column packed to the start sizes
+       the wall to its content, which is the full width of every canvas, and on
+       a phone the right-hand tiles ran off the screen. */
+    .wall-layout { flex-direction:column; align-items:stretch; }
+    .wall-layout .wall { flex:none; }
     .picker { width:100%; }
     .pick-list { max-height:none; }
   }
@@ -4731,6 +4761,24 @@ const STYLES = `
   .overlay-controls { display:flex; gap:8px; align-items:center; }
   .overlay-controls select { padding:4px 8px; font-size:12px; }
   canvas.live { width:100%; display:block; background:#000; }
+  .close.icon { display:flex; align-items:center; justify-content:center; padding:7px; }
+
+  /* A phone: the camera takes the whole screen, as a phone's own camera view
+     does. The two selects and two buttons are wider than the screen, and in one
+     row the close button was squeezed to a sliver — the one control a viewer
+     needs most. The controls take a row of their own and the selects share it;
+     close goes to the corner, beside the name. The figures under the picture
+     wrap instead of scrolling sideways. */
+  @media (max-width: 600px) {
+    .overlay { padding:0; }
+    .overlay-box { max-width:none; height:100dvh; border-radius:0; }
+    .overlay-head { position:relative; padding:10px 12px; gap:8px; }
+    .overlay-head > span { padding-right:40px; }
+    .overlay-controls { width:100%; }
+    .overlay-controls select { flex:1 1 0; min-width:0; }
+    .overlay-head .close { position:absolute; top:4px; right:6px; }
+    .osd { white-space:pre-wrap; overflow-x:visible; padding:6px 12px; }
+  }
 
   @media (max-width: 870px) {
     .page { padding:12px; }

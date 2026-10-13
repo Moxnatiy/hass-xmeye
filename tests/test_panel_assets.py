@@ -316,3 +316,17 @@ def test_a_held_ptz_key_is_let_go_every_way_a_pointer_can_leave() -> None:
         )
     assert "setPointerCapture" in body, "a release off the key would be missed"
     assert "stopPropagation" in body, "a press on the pad would open the camera"
+
+
+def test_every_copy_of_a_live_figure_is_updated() -> None:
+    """On a phone the recorder's figures are drawn twice, once inside the "i".
+
+    ``_patch`` refreshes them by ``data-field``; reading only the first match
+    left the copy the viewer actually sees frozen at the moment the page loaded.
+    """
+    source = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8")
+    patch = source.split("\n  _patch() {", 1)
+    assert len(patch) == 2, "_patch is gone; this test needs updating"
+    body = patch[1].split("\n  }\n", 1)[0]
+    assert "querySelectorAll(`[data-field=" in body, "only the first copy is updated"
+    assert 'class="tip-facts"' in source, "the figures are no longer in the tip"
