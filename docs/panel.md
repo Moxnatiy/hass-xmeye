@@ -180,6 +180,29 @@ screen only once they are spent. Access tokens are refreshed before every
 stream request — Home Assistant's expires after about half an hour, and a wall
 left open overnight answers 401 the moment it reconnects with the old one.
 
+### Pan, tilt and zoom
+
+Every tile with a live camera offers a PTZ switch in its bottom right corner,
+shown while the pointer is on the tile. A tile switched on shows a pad while the
+pointer is on it: eight directions, zoom in and out, and a bookmark in the
+middle that opens eight presets — a number goes there, and **Save** followed by
+a number keeps the current view under it. The recorder cannot tell which of its
+cameras turn, so the choice is the viewer's; it is kept per recorder and
+survives a reload. On a touch screen the switch stays visible and a tile
+switched on keeps its pad.
+
+A movement runs while its key is held, and a click is a short step: the camera
+starts about 0.3 s after the command, so a click whose stop followed its start
+by a few dozen milliseconds used to move nothing. The stop now waits until the
+movement has had 400 ms.
+
+Whoever starts a movement owes the stop, and a browser cannot be trusted with
+it alone — a tab closed mid-press would leave the camera turning into its end
+stop. So the panel repeats the move every half second while the key is held,
+and the integration stops the camera itself when the repeats stop for a second
+and a half. The commands use a connection of their own, so a stop never waits
+behind the poll.
+
 ## Playback methods
 
 Switchable inside the viewer, with a technical line under the picture.
@@ -357,6 +380,7 @@ keyframes only, and `noPaint` decodes without drawing.
 | Endpoint | Purpose |
 |---|---|
 | `xmeye/devices`, `xmeye/detail`, … (WebSocket) | Recorder state, channels, recordings, configuration, log |
+| `xmeye/ptz` (WebSocket) | Move, stop, and go to or save a preset; repeated while a key is held |
 | `/api/xmeye/native/<entry>/<channel>?stream=…` | The native frame stream: a JSON header, then `flags, length, timestamp, payload` per frame |
 | `/api/camera_proxy/…` | Snapshots and HLS, through Home Assistant's own camera plumbing |
 

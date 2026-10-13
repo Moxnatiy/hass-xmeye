@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
+from .ptz import PtzControl
 from .xmeyelib import (
     ChannelStatus,
     DeviceInfo,
@@ -111,6 +112,8 @@ class XmeyeCoordinator(DataUpdateCoordinator[XmeyeData]):
         self._static: dict[str, Any] = {}
         #: Guards the control session against concurrent calls from services and panel.
         self.lock = asyncio.Lock()
+        #: Pan, tilt and zoom from the panel, on a connection of its own.
+        self.ptz = PtzControl(dict(entry.data))
 
     @property
     def host(self) -> str:

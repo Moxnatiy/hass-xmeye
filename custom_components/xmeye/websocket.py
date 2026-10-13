@@ -21,12 +21,14 @@ from .const import (
     DEFAULT_RTSP_PORT,
     DOMAIN,
     PLAYER_NATIVE,
+    PTZ_DIRECTIONS,
     STREAM_MAIN,
     STREAM_SUB,
 )
 from .coordinator import XmeyeCoordinator
+from .ptz import HOLD_REPEAT
 from .report import enabled_capabilities, format_report, redact
-from .xmeyelib import XmeyeError
+from .xmeyelib import PtzCommand, XmeyeError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +68,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_stream_url)
+    websocket_api.async_register_command(hass, ws_ptz)
 
 
 @websocket_api.websocket_command(
@@ -97,6 +100,64 @@ def ws_stream_url(
         return
     path = async_sign_path(hass, f"/api/xmeye/ws/{msg['entry_id']}", STREAM_URL_LIFETIME)
     connection.send_result(msg["id"], {"path": path})
+
+
+#: Preset commands the panel may send, by the name it uses.
+PTZ_PRESET_ACTIONS = {
+    "goto": PtzCommand.GOTO_PRESET,
+    "set": PtzCommand.SET_PRESET,
+    "clear": PtzCommand.CLEAR_PRESET,
+}
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/ptz",
+        vol.Required("entry_id"): str,
+        vol.Required("channel"): vol.All(int, vol.Range(min=0)),
+        vol.Required("action"): vol.In(["move", "stop", *PTZ_PRESET_ACTIONS]),
+        vol.Optional("direction"): vol.In(list(PTZ_DIRECTIONS)),
+        vol.Optional("speed", default=5): vol.All(int, vol.Range(min=1, max=8)),
+        vol.Optional("preset"): vol.All(int, vol.Range(min=1, max=255)),
+    }
+)
+@websocket_api.async_response
+async def ws_ptz(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Move, stop, or use a preset.
+
+    ``move`` starts a movement and, repeated, keeps it going: the panel sends it
+    every ``hold_repeat`` seconds while the button is held, and the camera stops
+    by itself when the repeats stop. ``stop`` stops it at once.
+    """
+    coordinator = _require(hass, msg["entry_id"])
+    channel = msg["channel"]
+    action = msg["action"]
+    try:
+        if action == "move":
+            if "direction" not in msg:
+                raise vol.Invalid("a move needs a direction")
+            await coordinator.ptz.move(
+                channel, PTZ_DIRECTIONS[msg["direction"]], msg["speed"]
+            )
+        elif action == "stop":
+            await coordinator.ptz.stop(channel)
+        else:
+            if "preset" not in msg:
+                raise vol.Invalid("a preset action needs a preset number")
+            await coordinator.ptz.preset(
+                channel, PTZ_PRESET_ACTIONS[action], msg["preset"]
+            )
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_INVALID_FORMAT, str(err))
+        return
+    except XmeyeError as err:
+        connection.send_error(msg["id"], "ptz_failed", str(err))
+        return
+    connection.send_result(msg["id"], {"hold_repeat": HOLD_REPEAT})
 
 
 @websocket_api.websocket_command(

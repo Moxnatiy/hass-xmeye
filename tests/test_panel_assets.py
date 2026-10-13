@@ -295,3 +295,24 @@ def test_a_pinch_never_ends_in_a_seek() -> None:
         "a finger left over from a pinch starts a press that can still count as "
         "a tap, so lifting it after a pinch seeks"
     )
+
+
+def test_a_held_ptz_key_is_let_go_every_way_a_pointer_can_leave() -> None:
+    """A key that misses its release leaves the panel repeating "keep turning".
+
+    The server stops a camera when the repeats stop, but repeats that never stop
+    keep it turning to its end stop. ``pointerup`` alone misses a touch the
+    browser takes over for scrolling (``pointercancel``) and a capture lost to
+    a redraw (``lostpointercapture``), so all three must release, and the
+    tile's own click must not open the camera mid-press.
+    """
+    source = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8")
+    bind = source.split("\n  _bindPtz(root) {", 1)
+    assert len(bind) == 2, "_bindPtz is gone; this test needs updating"
+    body = bind[1].split("\n  }\n", 1)[0]
+    for event in ("pointerup", "pointercancel", "lostpointercapture"):
+        assert re.search(rf'addEventListener\("{event}", release\)', body), (
+            f"a held PTZ key is not let go on {event}"
+        )
+    assert "setPointerCapture" in body, "a release off the key would be missed"
+    assert "stopPropagation" in body, "a press on the pad would open the camera"

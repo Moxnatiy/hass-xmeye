@@ -46,6 +46,9 @@ so everything stays on your network.
   raw JSON, and the whole configuration tree when you do want the raw view.
 - **Five languages.** English, Ukrainian, Spanish, French and German, following
   Home Assistant's language setting.
+- **Pan, tilt and zoom on the wall.** Point at a tile and a pad appears: hold an
+  arrow to turn, click for a short step, and keep up to eight presets. A camera
+  stops by itself if the browser goes quiet mid-press.
 - **Works on a phone.** Home Assistant's own top bar and menu button, and a
   channel list that folds away so the wall gets the width.
 

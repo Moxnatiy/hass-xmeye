@@ -162,9 +162,43 @@ const channelsIcon = () =>
   ` font-weight="700" letter-spacing="-0.2"` +
   ` font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">CH</text></svg>`;
 
+//: Preset slots on the pad. The recorder takes up to 255; eight is what fits a
+//: quarter tile and what a camera watching one yard actually needs.
+const PTZ_PRESETS = 8;
+
+//: The shortest movement, in milliseconds: what one click on an arrow turns.
+const PTZ_NUDGE = 400;
+
 const prevIcon = () => mark('<path d="M10 3.4 5.4 8l4.6 4.6"/>');
 
 const nextIcon = () => mark('<path d="M6 3.4 10.6 8 6 12.6"/>');
+
+//: Pan, tilt and zoom: four arrowheads around a centre, the mark a PTZ
+//: joystick wears.
+const ptzIcon = () =>
+  mark(
+    '<path d="M8 1.6v12.8M1.6 8h12.8"/>' +
+      '<path d="M6 3.6 8 1.6l2 2M6 12.4l2 2 2-2M3.6 6 1.6 8l2 2M12.4 6l2 2-2 2"/>'
+  );
+
+//: One chevron per direction of the pad, rotated rather than drawn eight times.
+const PTZ_ANGLES = {
+  up: 0, up_right: 45, right: 90, down_right: 135,
+  down: 180, down_left: 225, left: 270, up_left: 315,
+};
+const ptzArrow = (direction) =>
+  mark(
+    `<path d="M4.2 10 8 6.2l3.8 3.8" transform="rotate(${PTZ_ANGLES[direction]} 8 8)"/>`
+  );
+
+const zoomIcon = (closer) =>
+  mark(
+    '<circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4 14 14"/><path d="M4.9 7h4.2"/>' +
+      (closer ? '<path d="M7 4.9v4.2"/>' : "")
+  );
+
+//: Presets: a bookmark, the mark for "a place kept to come back to".
+const presetIcon = () => mark('<path d="M4.4 2.2h7.2v11.6L8 10.9l-3.6 2.9z"/>');
 
 //: The tooltip on a layout button. Plural rules differ per language and this
 //: one sentence is not worth a plural engine, so each language phrases the
@@ -687,6 +721,10 @@ class XmeyePanel extends HTMLElement {
     //: The socket behind the single-camera view, when the native player is the
     //: one showing it.
     this._nativeSocket = null;
+    //: channel → the held pan, tilt or zoom key and its repeat timer
+    this._ptzHeld = new Map();
+    //: channel → the timer that ends a tap's step
+    this._ptzNudges = new Map();
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     //: Whether the channel list sits beside the wall. Shown unless someone has
@@ -1964,15 +2002,17 @@ class XmeyePanel extends HTMLElement {
       hidden: Array.isArray(stored.hidden) ? stored.hidden.map(Number) : [],
       //: Per-channel stream choice, keyed by channel index.
       streams: stored.streams && typeof stored.streams === "object" ? stored.streams : {},
+      //: Tiles with the pan, tilt and zoom pad switched on.
+      ptz: Array.isArray(stored.ptz) ? stored.ptz.map(Number) : [],
     };
     return this._wallPrefs;
   }
 
   _saveWallPrefs() {
-    const { order, hidden, streams } = this._loadWallPrefs();
+    const { order, hidden, streams, ptz } = this._loadWallPrefs();
     localStorage.setItem(
       `xmeye-wall-${this._entryId}`,
-      JSON.stringify({ order, hidden, streams })
+      JSON.stringify({ order, hidden, streams, ptz })
     );
   }
 
@@ -2058,7 +2098,187 @@ class XmeyePanel extends HTMLElement {
         <div class="cell-foot" data-field="wall${channel.index}">
           ${channel.online ? t("connecting…") : t("offline")}
         </div>
+        ${channel.online ? this._ptzControls(channel.index) : ""}
       </div>`;
+  }
+
+  /**
+   * Pan, tilt and zoom over a wall tile, shown while the pointer is on it.
+   *
+   * The recorder cannot say which of its cameras turn — an ONVIF camera's PTZ
+   * is the camera's business — so every tile offers the switch, and a tile
+   * switched on keeps its pad, per recorder, across reloads. A camera that
+   * cannot turn simply ignores the commands; nothing breaks.
+   */
+  _ptzControls(index) {
+    const on = this._loadWallPrefs().ptz.includes(index);
+    const dirs = ["up_left", "up", "up_right", "left", null, "right", "down_left", "down", "down_right"];
+    const pad = dirs
+      .map((direction) =>
+        direction
+          ? `<button class="ptz-key" data-move="${direction}" title="${t("Hold to turn")}">${ptzArrow(direction)}</button>`
+          : `<button class="ptz-key ptz-centre" data-presets title="${t("Presets")}">${presetIcon()}</button>`
+      )
+      .join("");
+    const numbers = Array.from({ length: PTZ_PRESETS }, (_, i) =>
+      `<button class="ptz-num" data-preset="${i + 1}">${i + 1}</button>`
+    ).join("");
+    return `
+      <div class="ptz ${on ? "on" : ""}" data-ptz="${index}">
+        <button class="ptz-toggle" data-ptz-toggle
+                title="${on ? t("Hide pan, tilt and zoom") : t("Pan, tilt and zoom")}">${ptzIcon()}</button>
+        <div class="ptz-pad">
+          <div class="ptz-dirs">${pad}</div>
+          <div class="ptz-zoom">
+            <button class="ptz-key" data-move="zoom_in" title="${t("Zoom in")}">${zoomIcon(true)}</button>
+            <button class="ptz-key" data-move="zoom_out" title="${t("Zoom out")}">${zoomIcon(false)}</button>
+          </div>
+        </div>
+        <div class="ptz-presets" hidden>
+          <div class="ptz-nums">${numbers}</div>
+          <button class="ptz-save" data-save title="${t("Save the current view as a preset")}">${t("Save")}</button>
+        </div>
+      </div>`;
+  }
+
+  /** Wire the pads on every tile under `root`. */
+  _bindPtz(root) {
+    root.querySelectorAll(".ptz[data-ptz]").forEach((box) => {
+      const channel = Number(box.dataset.ptz);
+      // Everything inside belongs to the pad: a press that reached the tile
+      // would open the camera full screen in the middle of turning it.
+      box.addEventListener("click", (event) => event.stopPropagation());
+
+      box.querySelector("[data-ptz-toggle]").addEventListener("click", () => {
+        const prefs = this._loadWallPrefs();
+        const on = !prefs.ptz.includes(channel);
+        prefs.ptz = on ? [...prefs.ptz, channel] : prefs.ptz.filter((c) => c !== channel);
+        this._saveWallPrefs();
+        box.classList.toggle("on", on);
+        box.querySelector("[data-ptz-toggle]").title = on
+          ? t("Hide pan, tilt and zoom")
+          : t("Pan, tilt and zoom");
+        if (!on) {
+          this._ptzRelease(channel);
+          box.querySelector(".ptz-presets").hidden = true;
+        }
+      });
+
+      box.querySelectorAll("[data-move]").forEach((key) => {
+        key.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          // Captured, so letting go anywhere — even off the tile — still stops.
+          key.setPointerCapture(event.pointerId);
+          key.classList.add("held");
+          this._ptzHold(channel, key.dataset.move, key);
+        });
+        const release = () => {
+          if (!key.classList.contains("held")) return;
+          key.classList.remove("held");
+          this._ptzRelease(channel);
+        };
+        key.addEventListener("pointerup", release);
+        key.addEventListener("pointercancel", release);
+        key.addEventListener("lostpointercapture", release);
+        // A long press on a phone would otherwise bring up the context menu.
+        key.addEventListener("contextmenu", (event) => event.preventDefault());
+      });
+
+      const presets = box.querySelector(".ptz-presets");
+      const save = presets.querySelector("[data-save]");
+      box.querySelector("[data-presets]").addEventListener("click", () => {
+        presets.hidden = !presets.hidden;
+        save.classList.remove("active");
+      });
+      save.addEventListener("click", () => save.classList.toggle("active"));
+      presets.querySelectorAll("[data-preset]").forEach((button) =>
+        button.addEventListener("click", async () => {
+          const saving = save.classList.contains("active");
+          save.classList.remove("active");
+          const ok = await this._ptzSend(channel, {
+            action: saving ? "set" : "goto",
+            preset: Number(button.dataset.preset),
+          });
+          if (ok) this._flash(button);
+          if (ok && !saving) presets.hidden = true;
+        })
+      );
+    });
+  }
+
+  /**
+   * Start turning, and keep saying so while the key is held.
+   *
+   * The server stops the camera by itself when the repeats stop arriving, so a
+   * tab closed mid-press cannot leave a camera turning into its end stop.
+   */
+  _ptzHold(channel, direction, key) {
+    this._ptzRelease(channel, { quiet: true });
+    // A new press takes over from a tap still running out its nudge.
+    clearTimeout(this._ptzNudges.get(channel));
+    this._ptzNudges.delete(channel);
+    const send = () => {
+      // A redraw can take the key away mid-press, and a removed element does
+      // not reliably hear that its pointer was let go. Gone means let go.
+      if (!key.isConnected) {
+        this._ptzRelease(channel);
+        return Promise.resolve(null);
+      }
+      return this._ptzSend(channel, { action: "move", direction });
+    };
+    const held = { timer: null, since: performance.now() };
+    this._ptzHeld.set(channel, held);
+    send().then((reply) => {
+      if (this._ptzHeld.get(channel) !== held) return;
+      const every = ((reply && reply.hold_repeat) || 0.5) * 1000;
+      held.timer = setInterval(send, every);
+    });
+  }
+
+  /**
+   * Let go: stop the repeats and the camera.
+   *
+   * Not before PTZ_NUDGE has passed, though. The camera starts about 0.3 s
+   * after the command, so a click — down and up in a few dozen milliseconds —
+   * sent its stop before anything moved and did nothing at all. Held to the
+   * minimum, a click is a small step, which is what a click on an arrow means.
+   */
+  _ptzRelease(channel, { quiet = false } = {}) {
+    const held = this._ptzHeld.get(channel);
+    if (!held) return;
+    clearInterval(held.timer);
+    this._ptzHeld.delete(channel);
+    if (quiet) return;
+    const stop = () => {
+      this._ptzNudges.delete(channel);
+      this._ptzSend(channel, { action: "stop" });
+    };
+    const left = PTZ_NUDGE - (performance.now() - held.since);
+    if (left > 0) this._ptzNudges.set(channel, setTimeout(stop, left));
+    else stop();
+  }
+
+  /** Every held key, let go — when the wall goes away under a press. */
+  _ptzReleaseAll() {
+    [...this._ptzHeld.keys()].forEach((channel) => this._ptzRelease(channel));
+  }
+
+  async _ptzSend(channel, body) {
+    try {
+      return await this._ws({ type: "xmeye/ptz", entry_id: this._entryId, channel, ...body });
+    } catch (err) {
+      this._noteDiag("ptz", `channel ${channel} ${body.action}: ${err.message || err.code || err}`);
+      const box = this.shadowRoot.querySelector(`.ptz[data-ptz="${channel}"]`);
+      if (box) this._flash(box, "failed");
+      return null;
+    }
+  }
+
+  /** A moment of colour on an element, to say a press was heard (or not). */
+  _flash(element, name = "done") {
+    element.classList.add(name);
+    setTimeout(() => element.classList.remove(name), 700);
   }
 
   /**
@@ -2265,6 +2485,7 @@ class XmeyePanel extends HTMLElement {
     wall.querySelectorAll(".cell[data-channel]").forEach((cell) =>
       cell.addEventListener("click", () => this._openLive(Number(cell.dataset.channel)))
     );
+    this._bindPtz(wall);
 
     // The pager and the count belong to the toolbar, which is cheap to replace.
     const bar = root.querySelector(".wall-bar");
@@ -2340,6 +2561,7 @@ class XmeyePanel extends HTMLElement {
   }
 
   _stopWall() {
+    this._ptzReleaseAll();
     if (this._wallReader) {
       this._wallReader.stop();
       this._wallReader = null;
@@ -3813,6 +4035,7 @@ class XmeyePanel extends HTMLElement {
     root.querySelectorAll(".cell[data-channel]").forEach((cell) =>
       cell.addEventListener("click", () => this._openLive(Number(cell.dataset.channel)))
     );
+    this._bindPtz(root);
 
     this._bindTimeline(root);
 
@@ -4272,6 +4495,52 @@ const STYLES = `
   .cell-foot { position:absolute; left:0; right:0; bottom:0; padding:6px 8px;
     font-size:11px; color:#ddd; background: linear-gradient(transparent, rgba(0,0,0,.6));
     font-family: ui-monospace, "SF Mono", Menlo, monospace; pointer-events:none; }
+
+  /* Pan, tilt and zoom over a tile. The keys scale with the tile — a quarter of
+     a 4K wall and one of sixteen are very different sizes — between what a
+     finger can hit and what still leaves the picture visible. */
+  /* The layer is the container rather than the tile: a tile sized as a
+     container loses its own size, and where the wall stacks under the channel
+     list it took the whole wall down to nothing. The layer already spans the
+     tile, so its size is the tile's. */
+  .ptz { position:absolute; inset:0; pointer-events:none; container-type: size; }
+  .ptz > * { --k: clamp(24px, 12cqmin, 40px); }
+  .ptz button { pointer-events:auto; color:#fff; background: rgba(0,0,0,.45);
+    border:1px solid rgba(255,255,255,.22); border-radius:8px; padding:0;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    touch-action:none; user-select:none; -webkit-user-select:none; }
+  .ptz button:hover { background: rgba(0,0,0,.65); border-color: rgba(255,255,255,.5); }
+  .ptz button svg { display:block; width:calc(var(--k) * .5); height:calc(var(--k) * .5); }
+  .ptz-toggle { position:absolute; right:8px; bottom:28px; width:var(--k); height:var(--k);
+    opacity:0; transition: opacity .15s ease; }
+  .ptz.on .ptz-toggle { background: var(--primary-color); border-color: var(--primary-color); }
+  .ptz-pad { position:absolute; left:8px; bottom:28px; display:none; gap:6px;
+    align-items:flex-end; }
+  .ptz-dirs { display:grid; grid-template-columns: repeat(3, var(--k)); gap:3px; }
+  .ptz-zoom { display:flex; flex-direction:column; gap:3px; }
+  .ptz-key { width:var(--k); height:var(--k); }
+  .ptz-key.held { background: var(--primary-color); border-color: var(--primary-color); }
+  .ptz-centre { border-radius:50%; }
+  .ptz-presets { position:absolute; left:calc(8px + var(--k) * 4 + 15px); bottom:28px;
+    display:flex; flex-direction:column; gap:4px; padding:4px; border-radius:10px;
+    background: rgba(0,0,0,.35); pointer-events:auto; }
+  .ptz-presets[hidden] { display:none; }
+  .ptz-nums { display:grid; grid-template-columns: repeat(4, var(--k)); gap:3px; }
+  .ptz-num { height:var(--k); font-size:calc(var(--k) * .38); font-variant-numeric: tabular-nums; }
+  .ptz-save { height:calc(var(--k) * .8); font-size:calc(var(--k) * .32); }
+  .ptz-save.active { background: var(--warning-color, #ff9800); border-color: transparent; }
+  .ptz .done { background: var(--success-color, #43a047); }
+  .ptz.failed .ptz-pad button { border-color: var(--error-color, #f44336); }
+  /* Shown while the pointer is on the tile, or a key in it has focus. */
+  .cell:hover .ptz-toggle, .ptz:focus-within .ptz-toggle { opacity:1; }
+  .cell:hover .ptz.on .ptz-pad, .ptz.on:focus-within .ptz-pad { display:flex; }
+  /* A touch screen has no hover: the switch stays in sight, and a tile switched
+     on keeps its pad. */
+  @media (hover: none) {
+    .ptz-toggle { opacity:.8; }
+    .ptz.on .ptz-pad { display:flex; }
+  }
 
   /* Archive player */
   .player { background:#000; border-radius:12px; overflow:hidden; margin-bottom:16px;

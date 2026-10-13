@@ -68,6 +68,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: XmeyeConfigEntry) -> bo
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         coordinator: XmeyeCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.ptz.close()
         await coordinator.client.close()
 
     if not hass.data[DOMAIN]:
