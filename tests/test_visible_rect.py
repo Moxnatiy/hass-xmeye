@@ -131,3 +131,94 @@ def test_every_drawn_frame_goes_through_the_correction() -> None:
     assert uncrop != -1, "_draw never asks _uncrop to put the visible area right"
     assert held != -1, "_draw no longer holds the frame; this test needs updating"
     assert uncrop < held, "the frame is held for painting before it is corrected"
+
+
+#: (name, frame as the decoder describes it, stream info from the recorder, expected)
+SWAP_CASES = [
+    (
+        # Channel 3 of the dev recorder, an H.264 camera: the header says
+        # 1080x1920, the stream is 1920x1080.
+        "h264 main stream, header swapped",
+        {"codedWidth": 1920, "codedHeight": 1088,
+         "visibleRect": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+         "displayWidth": 1920, "displayHeight": 1080},
+        {"width": 1080, "height": 1920},
+        {"width": 1920, "height": 1080},
+    ),
+    (
+        "h264 sub stream, header swapped",
+        {"codedWidth": 640, "codedHeight": 368,
+         "visibleRect": {"x": 0, "y": 0, "width": 640, "height": 360},
+         "displayWidth": 640, "displayHeight": 360},
+        {"width": 360, "height": 640},
+        {"width": 640, "height": 360},
+    ),
+    (
+        "header right",
+        {"codedWidth": 3840, "codedHeight": 2176,
+         "visibleRect": {"x": 0, "y": 0, "width": 3840, "height": 2160},
+         "displayWidth": 3840, "displayHeight": 2160},
+        {"width": 3840, "height": 2160},
+        None,
+    ),
+    (
+        # The Edge fault from issue #5 is a visible area too small, not a
+        # swap, and must stay the business of trueVisibleRect alone.
+        "edge's small visible area is not a swap",
+        {"codedWidth": 1952, "codedHeight": 1088,
+         "visibleRect": {"x": 0, "y": 0, "width": 1280, "height": 720},
+         "displayWidth": 1280, "displayHeight": 720},
+        {"width": 1928, "height": 1088},
+        None,
+    ),
+    (
+        # A portrait camera is stated as portrait: nothing to put right.
+        "a portrait stream",
+        {"codedWidth": 1088, "codedHeight": 1920,
+         "visibleRect": {"x": 0, "y": 0, "width": 1080, "height": 1920},
+         "displayWidth": 1080, "displayHeight": 1920},
+        {"width": 1080, "height": 1920},
+        None,
+    ),
+    ("no stream info",
+     {"codedWidth": 1920, "codedHeight": 1088,
+      "visibleRect": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+      "displayWidth": 1920, "displayHeight": 1080},
+     None, None),
+]
+
+
+def test_swapped_size() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is unavailable")
+    script = (
+        f"const m = await import({json.dumps(PLAYER.as_uri())});"
+        f"const cases = {json.dumps([[frame, info] for _, frame, info, _ in SWAP_CASES])};"
+        "console.log(JSON.stringify(cases.map(([f, i]) => m.swappedSize(f, i))));"
+    )
+    done = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+
+    got = json.loads(done.stdout)
+    wrong = [
+        f"{name}: expected {expected}, got {answer}"
+        for (name, _, _, expected), answer in zip(SWAP_CASES, got, strict=True)
+        if answer != expected
+    ]
+    assert not wrong, "\n".join(wrong)
+
+
+def test_first_frame_settles_the_size() -> None:
+    """``_draw`` asks ``_unswap`` on the first decoded frame, before any paint."""
+    source = PLAYER.read_text(encoding="utf-8")
+    body = source.split("\n  _draw(frame) {", 1)[1].split("\n  }\n", 1)[0]
+    unswap = body.find("this._unswap(frame)")
+    held = body.find("this._pendingFrame = frame")
+    assert unswap != -1, "_draw never asks _unswap about the picture size"
+    assert unswap < held, "the frame is held for painting before the size is settled"

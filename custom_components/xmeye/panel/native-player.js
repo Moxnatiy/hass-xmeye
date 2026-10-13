@@ -227,6 +227,31 @@ export function trueVisibleRect(frame, info) {
   return { x: 0, y: 0, width, height };
 }
 
+/**
+ * The picture size, when the recorder stated it the wrong way round.
+ *
+ * On an H.264 IP channel the NBD8008R-U writes the keyframe header as
+ * height×width — 1080×1920 for a 1920×1080 camera, 360×640 for its sub stream —
+ * while the stream itself is right. Sized from the header, the canvas came out
+ * portrait and the tile showed the picture squeezed into a narrow strip. A
+ * 4K H.265 camera on the same recorder is stated correctly.
+ *
+ * The decoder reads the size from the stream's own parameter sets, so its first
+ * frame settles it. Answers the size to use, or null when the header was right.
+ * Only an exact swap counts, so a decoder that misreports its visible area — see
+ * `trueVisibleRect` — is never taken for one.
+ */
+export function swappedSize(frame, info) {
+  const width = (info && info.width) || 0;
+  const height = (info && info.height) || 0;
+  if (!width || !height || width === height) return null;
+  const shown = frame.visibleRect || { width: frame.displayWidth, height: frame.displayHeight };
+  const near = (a, b) => Math.abs(a - b) <= VISIBLE_SLACK;
+  if (near(shown.width, width) && near(shown.height, height)) return null;
+  if (!near(shown.width, height) || !near(shown.height, width)) return null;
+  return { width: height, height: width };
+}
+
 //: Where configurations that died on their first frames are remembered.
 const BAD_CONFIGS = "xmeye-bad-configs";
 
@@ -557,9 +582,7 @@ export class NativePlayer {
   async _configure(keyframe) {
     this.stats.codec = this.info.codec;
     this.stats.resolution = `${this.info.width}x${this.info.height}`;
-    const scale = Math.min(1, MAX_CANVAS_WIDTH / Math.max(this.info.width, 1));
-    const width = Math.round(this.info.width * scale);
-    const height = Math.round(this.info.height * scale);
+    const { width, height } = this._canvasSize();
     // Writing either dimension wipes the canvas even when the value is
     // unchanged, so a decoder restart on the same stream used to blank a tile
     // that was showing a perfectly good picture — the blink on Safari, where the
@@ -637,6 +660,32 @@ export class NativePlayer {
       return false;
     }
     return true;
+  }
+
+  /** The canvas for the stated picture size, no wider than MAX_CANVAS_WIDTH. */
+  _canvasSize() {
+    const scale = Math.min(1, MAX_CANVAS_WIDTH / Math.max(this.info.width, 1));
+    return {
+      width: Math.round(this.info.width * scale),
+      height: Math.round(this.info.height * scale),
+    };
+  }
+
+  /** Take the decoder's word for the picture size when the header had it swapped. */
+  _unswap(frame) {
+    const size = swappedSize(frame, this.info);
+    if (!size) return;
+    this.note(
+      "recorder swapped the picture size",
+      `header ${this.info.width}x${this.info.height}, stream ${size.width}x${size.height}`
+    );
+    // Corrected in place, so a decoder restart and its remembered failures use
+    // the true size too.
+    this.info = { ...this.info, ...size };
+    this.stats.resolution = `${size.width}x${size.height}`;
+    const canvas = this._canvasSize();
+    this.canvas.width = canvas.width;
+    this.canvas.height = canvas.height;
   }
 
   async _pickConfigs(keyframe) {
@@ -981,6 +1030,7 @@ export class NativePlayer {
           `${visible ? `${visible.width}x${visible.height}` : "?"} visible, ` +
           `${frame.displayWidth}x${frame.displayHeight} display`
       );
+      this._unswap(frame);
     }
     frame = this._uncrop(frame);
     this.stats.decoded += 1;
