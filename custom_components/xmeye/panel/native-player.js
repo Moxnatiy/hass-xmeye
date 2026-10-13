@@ -194,6 +194,39 @@ class BitReader {
 export const nativePlayerSupported = () =>
   typeof VideoDecoder !== "undefined" && typeof ReadableStream !== "undefined";
 
+//: How much smaller than the stream's own picture a decoded frame's visible
+//: area may be before it is taken for a decoder's mistake rather than rounding.
+//: The recorder states its size in eight-pixel steps and the SPS crops to the
+//: pixel, so a few pixels either way are honest. The error this guards against
+//: is hundreds.
+const VISIBLE_SLACK = 16;
+
+/**
+ * The part of a decoded frame that is really picture, when the decoder says less.
+ *
+ * Edge on Windows, decoding HEVC in hardware, hands back frames whose
+ * `visibleRect` is far smaller than the picture they hold — 1280×720 of a frame
+ * coded 1952×1088, in one report. `drawImage` draws exactly the visible area,
+ * so the tile showed a corner of the picture blown up to fill it, live and in
+ * the archive alike. The pixels are fine: the same frame with its visible area
+ * put right draws the whole picture. Chrome on the same stream reports it
+ * correctly, and so does HLS, which never asks.
+ *
+ * The recorder states the picture size in every keyframe header, quite apart
+ * from any decoder, so that is the size used — clamped to the coded size,
+ * because a frame cannot show more than it holds. Answers null whenever the
+ * decoder's own figure is believable, which is every browser but the one at
+ * fault, so for everyone else this changes nothing.
+ */
+export function trueVisibleRect(frame, info) {
+  const width = Math.min((info && info.width) || 0, frame.codedWidth || 0);
+  const height = Math.min((info && info.height) || 0, frame.codedHeight || 0);
+  if (!width || !height) return null;
+  const shown = frame.visibleRect || { width: frame.displayWidth, height: frame.displayHeight };
+  if (shown.width >= width - VISIBLE_SLACK && shown.height >= height - VISIBLE_SLACK) return null;
+  return { x: 0, y: 0, width, height };
+}
+
 //: Where configurations that died on their first frames are remembered.
 const BAD_CONFIGS = "xmeye-bad-configs";
 
@@ -938,8 +971,18 @@ export class NativePlayer {
     queueMicrotask(() => this._feed());
     const first = this.stats.decoded === 0;
     if (first) {
-      this.note("first frame received", `${frame.displayWidth}x${frame.displayHeight}`);
+      // All three sizes, because they can disagree, and when they do it is the
+      // whole story: a decoder that misreports the visible area looked, in this
+      // line, exactly like one that did not.
+      const visible = frame.visibleRect;
+      this.note(
+        "first frame received",
+        `${frame.codedWidth}x${frame.codedHeight} coded, ` +
+          `${visible ? `${visible.width}x${visible.height}` : "?"} visible, ` +
+          `${frame.displayWidth}x${frame.displayHeight} display`
+      );
     }
+    frame = this._uncrop(frame);
     this.stats.decoded += 1;
     this._decodedSince += 1;
     // Statistics are published once a second, and waiting for that tick left the
@@ -998,6 +1041,44 @@ export class NativePlayer {
         next.close();
       }
     });
+  }
+
+  /**
+   * Put right a frame whose decoder misreported its visible area.
+   *
+   * See `trueVisibleRect` for why. A VideoFrame built from another shares its
+   * pixels rather than copying them, so this costs next to nothing — and it
+   * happens at all only in the browser that needs it. If the frame cannot be
+   * rebuilt it is drawn as it came, which is never worse than before.
+   */
+  _uncrop(frame) {
+    const rect = trueVisibleRect(frame, this.info);
+    if (!rect) return frame;
+    try {
+      const whole = new VideoFrame(frame, {
+        visibleRect: rect,
+        displayWidth: rect.width,
+        displayHeight: rect.height,
+      });
+      if (!this._uncropNoted) {
+        this._uncropNoted = true;
+        const visible = frame.visibleRect;
+        this.note(
+          "decoder misreported the picture",
+          `${visible ? `${visible.width}x${visible.height}` : "?"} visible of ` +
+            `${frame.codedWidth}x${frame.codedHeight} coded; drawing ` +
+            `${rect.width}x${rect.height}, the size the recorder states`
+        );
+      }
+      frame.close();
+      return whole;
+    } catch (err) {
+      if (!this._uncropNoted) {
+        this._uncropNoted = true;
+        this.note("could not correct the visible area", String(err.message || err));
+      }
+      return frame;
+    }
   }
 
   _publish() {
