@@ -1,0 +1,28 @@
+# go2rtc for the PTZ simulator: the RTSP server the recorder reads from.
+#
+# The video arrives from ptz_camera.py, which IPyCam pushes in over RTMP to
+# video_main and video_sub. The sound is added here, as a second source of
+# each stream: go2rtc takes video from one producer and audio from another and
+# serves them to a client as one RTSP session.
+#
+# G.711 A-law at 8 kHz, because that is what these recorders take from a camera
+# without argument. A 440 Hz tone with a higher beep once a second: easy to hear
+# that it is there, and the beep shows whether sound and picture keep in step.
+
+streams:
+  video_main:
+    - "exec:ffmpeg -hide_banner -loglevel error -re -f lavfi -i sine=frequency=440:beep_factor=2:sample_rate=8000 -c:a pcm_alaw -ar 8000 -ac 1 -f rtsp {output}"
+  video_sub:
+    - "exec:ffmpeg -hide_banner -loglevel error -re -f lavfi -i sine=frequency=440:beep_factor=2:sample_rate=8000 -c:a pcm_alaw -ar 8000 -ac 1 -f rtsp {output}"
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+
+rtmp:
+  listen: ":1935"
+
+log:
+  level: info
