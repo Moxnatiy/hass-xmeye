@@ -209,25 +209,28 @@ A speaker above the PTZ switch hears that tile; one tile at a time, so two
 cameras never talk over each other. The single-camera view has the same button
 beside the stream choice.
 
-Recorders differ in which streams carry the sound: the dev recorder relayed an
-ONVIF camera's sound on main only, while a user's sixteen-channel recorder sends
-it on every sub stream. So a tile moves to main only when the stream it is on
-has brought no sound, for as long as it is heard, and goes back when the sound
-goes off. Switching sound on and off, the audio context's state and the blocks
-played all go to the client log. A camera that sends nothing turns its button
-amber and says so, once enough of the stream has gone by for the absence to
-mean something.
+The tile stays on the stream it is on. An earlier version moved a heard tile to
+main, on the belief that recorders send sound with main only; that was the
+simulator's main stream failing to start its tone, and recorders send the sound
+with every stream — a user's sixteen-channel recorder on every sub stream, the
+dev recorder too once the simulator was fixed. Moving only reloaded the tile.
+Switching sound on and off, the audio context's state and the blocks played all
+go to the client log. A camera that sends nothing turns its button amber and
+says so, once enough of the stream has gone by for the absence to mean
+something.
 
-A volume control appears beside the speaker while a tile is heard, and beside
-the sound button in the single-camera view. It runs from silent through the
-camera as it is, in the middle, to 30 dB of boost at the top — a cheap
-microphone indoors peaks around -48 dBFS, inaudible as it is. Linear below the
-middle and even in decibels above it. The position is kept per channel and
-shared by the tile and the single view. After the gain a soft limiter passes
-every sample under 0.7 unchanged and bends the rest towards full scale, so a
-boosted shout does not crack; the browser's own compressor was tried and added
-make-up gain of its own, lifting quiet sound and still letting a boosted beep
-through at 1.4.
+A volume control stands upright above the speaker while the tile is heard and
+the pointer is on the speaker or the slider; it goes when the pointer does. In
+the single-camera view it drops below the sound button, the header having
+nothing above it. On a touch screen a tap on the speaker brings it up until a
+tap elsewhere. It runs from silent at the bottom through the camera as it is,
+in the middle, to 30 dB of boost at the top — a cheap microphone indoors peaks
+around -48 dBFS, inaudible as it is. Linear below the middle and even in
+decibels above it. The position is kept per channel and shared by the tile and
+the single view. After the gain a soft limiter passes every sample under 0.7
+unchanged and bends the rest towards full scale, so a boosted shout does not
+crack; the browser's own compressor was tried and added make-up gain of its
+own, lifting quiet sound and still letting a boosted beep through at 1.4.
 
 The sound is G.711, which browsers do not decode, so the panel does: two
 tables from the formulas in ITU-T G.711, then Web Audio, each block scheduled

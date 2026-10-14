@@ -121,11 +121,14 @@ preset's number in the same field; the recorder hands it on to an ONVIF camera
 as a preset named `Preset_003`. `Step` is the speed. The camera starts about
 0.3 s after the command.
 
-**Audio from an ONVIF camera: codec 0, main stream only.** The recorder relays
-a camera's G.711 A-law at 8 kHz in 1024-byte blocks, eight a second, with the
-codec nibble set to 0 — a value the firmware's own table does not have. Decoded
-as A-law, a capture from the simulator is its 440 Hz tone exactly. The sub
-stream of the same channel carries no audio at all.
+**Audio from an ONVIF camera: codec 0.** The recorder relays a camera's G.711
+A-law at 8 kHz in 1024-byte blocks, eight a second, with the codec nibble set
+to 0 — a value the firmware's own table does not have. Decoded as A-law, a
+capture from the simulator is its 440 Hz tone exactly. The sound comes with
+every stream of the channel. (An earlier note here said main only; that was the
+simulator's main-stream tone failing to start.) Another user's recorder sends
+320-byte blocks, 25 a second, on every sub stream, A-law or µ-law per camera,
+with the usual codec numbers.
 
 **Keyframe size on an H.264 IP channel is swapped.** The same recorder writes
 1080×1920 into the keyframe header of a 1920×1080 H.264 camera (360×640 for its

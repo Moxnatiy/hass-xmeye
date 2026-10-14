@@ -330,3 +330,19 @@ def test_every_copy_of_a_live_figure_is_updated() -> None:
     body = patch[1].split("\n  }\n", 1)[0]
     assert "querySelectorAll(`[data-field=" in body, "only the first copy is updated"
     assert 'class="tip-facts"' in source, "the figures are no longer in the tip"
+
+
+def test_switching_sound_does_not_reload_the_tile() -> None:
+    """Sound goes on and off on the stream the tile is already playing.
+
+    A version moved a heard tile to the main stream, which redialled it — the
+    picture blanked and reloaded on every press of the speaker. Recorders send
+    the sound with every stream, so nothing about sound may restart a tile.
+    """
+    source = (PANEL_DIR / "xmeye-panel.js").read_text(encoding="utf-8")
+    toggle = source.split("\n  _toggleWallSound(index) {", 1)
+    assert len(toggle) == 2, "_toggleWallSound is gone; this test needs updating"
+    body = toggle[1].split("\n  }\n", 1)[0]
+    assert "_restartWallTile" not in body, "switching sound reloads the tile"
+    stream = source.split("\n  _wallStream(index) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "_soundChannel" not in stream, "the tile's stream depends on its sound"

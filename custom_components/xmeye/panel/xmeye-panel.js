@@ -757,12 +757,8 @@ class XmeyePanel extends HTMLElement {
     //: The wall tile being heard, if any. One at a time: two cameras talking
     //: over each other help nobody.
     this._soundChannel = null;
-    //: Whether the tile being heard was moved to main for its sound.
-    this._soundOnMain = false;
     //: Whether the single-camera view is heard.
     this._liveSound = false;
-    //: The stream the view was on before sound moved it to main.
-    this._streamBeforeSound = null;
     //: The one AudioContext, made on the first press of a sound button —
     //: browsers start one only in answer to a click.
     this._audio = null;
@@ -1359,10 +1355,6 @@ class XmeyePanel extends HTMLElement {
     // Sound is switched on for a camera, not for the view: the next one opened
     // starts quiet, as a camera opened unexpectedly loud is a bad surprise.
     this._liveSound = false;
-    if (this._streamBeforeSound) {
-      this._liveStream = this._streamBeforeSound;
-      this._streamBeforeSound = null;
-    }
     this._render();
   }
 
@@ -2074,9 +2066,6 @@ class XmeyePanel extends HTMLElement {
   /** Which stream a wall tile shows. Sub by default: several 4K tiles at once
    *  overload both the browser and the recorder. */
   _wallStream(index) {
-    // Heard on a stream that brought no sound, the tile is on main while it is
-    // heard — see _toggleWallSound.
-    if (index === this._soundChannel && this._soundOnMain) return "main";
     const chosen = this._loadWallPrefs().streams[index];
     return chosen === "main" ? "main" : "sub";
   }
@@ -2184,11 +2173,15 @@ class XmeyePanel extends HTMLElement {
     ).join("");
     return `
       <div class="ptz ${on ? "on" : ""}" data-ptz="${index}">
-        <button class="tile-sound ${heard ? "on" : ""}" data-sound
-                title="${heard ? t("Sound off") : t("Sound")}">${soundIcon(heard)}</button>
-        <input class="tile-volume" type="range" min="0" max="100" step="1" data-volume
-               value="${this._volume(index)}" aria-label="${t("Volume")}"
-               title="${t("Volume")}: ${volumeLabel(this._volume(index))}">
+        <div class="tile-audio ${heard ? "on" : ""}">
+          <div class="tile-volume">
+            <input type="range" min="0" max="100" step="1" data-volume
+                   value="${this._volume(index)}" aria-label="${t("Volume")}"
+                   title="${t("Volume")}: ${volumeLabel(this._volume(index))}">
+          </div>
+          <button class="tile-sound ${heard ? "on" : ""}" data-sound
+                  title="${heard ? t("Sound off") : t("Sound")}">${soundIcon(heard)}</button>
+        </div>
         <button class="ptz-toggle" data-ptz-toggle
                 title="${on ? t("Hide pan, tilt and zoom") : t("Pan, tilt and zoom")}">${ptzIcon()}</button>
         <div class="ptz-pad">
@@ -2714,11 +2707,11 @@ class XmeyePanel extends HTMLElement {
   /**
    * Hear a wall tile, or stop hearing it.
    *
-   * Some recorders send sound with every stream and some with the main one
-   * only — the dev recorder relays an ONVIF camera's sound on main alone, while
-   * a user's sixteen-channel one sends it on every sub stream. So a tile moves
-   * to main only when the stream it is on has brought no sound, and goes back
-   * when the sound goes off; a tile whose sub stream talks stays where it is.
+   * The tile stays on the stream it is on. It used to move to main for its
+   * sound, on the belief that recorders send sound with main only; that was
+   * the simulator's main stream failing to start its tone, and recorders send
+   * the sound with every stream. Moving only reloaded the tile. A stream with
+   * no sound says so on the button instead.
    */
   _toggleWallSound(index) {
     const before = this._soundChannel;
@@ -2728,34 +2721,27 @@ class XmeyePanel extends HTMLElement {
       return;
     }
     const touched = [before, index].filter((c, i, all) => c !== null && all.indexOf(c) === i);
-    const streamsBefore = new Map(touched.map((c) => [c, this._wallStream(c)]));
-    const heardPlayer = context && this._wall.get(index);
-    this._soundOnMain = Boolean(context) && !(heardPlayer && heardPlayer.stats.sound);
     this._soundChannel = context ? index : null;
+    const heardPlayer = context && this._wall.get(index);
     this._noteDiag(
       "sound",
       context
-        ? `ch${index} on: ${heardPlayer && heardPlayer.stats.sound
-            ? `its ${streamsBefore.get(index)} stream carries ${heardPlayer.stats.sound}`
-            : `no sound seen on ${streamsBefore.get(index)}, moving to main`}; ` +
-          `audio context ${context.state}, ${context.sampleRate} Hz`
+        ? `ch${index} on, ${this._wallStream(index)} stream ` +
+            `${heardPlayer && heardPlayer.stats.sound
+              ? `carries ${heardPlayer.stats.sound}`
+              : "has brought no sound so far"}; ` +
+            `audio context ${context.state}, ${context.sampleRate} Hz`
         : `ch${index} off`
     );
 
     for (const channel of touched) {
-      const player = this._wall.get(channel);
       const heard = channel === this._soundChannel;
-      // The same stream keeps its player and only gains or loses the sound; a
-      // different one is a different stream from the recorder, so the tile is
-      // dialled again and the new player picks the sound up as it is made.
-      if (player && streamsBefore.get(channel) === this._wallStream(channel)) {
-        player.setSound(heard ? context : null, this._gain(channel));
-      } else {
-        this._restartWallTile(channel);
-      }
-      const box = this.shadowRoot.querySelector(`.ptz[data-ptz="${channel}"]`);
-      const button = box && box.querySelector("[data-sound]");
+      const player = this._wall.get(channel);
+      if (player) player.setSound(heard ? context : null, this._gain(channel));
+      const audio = this.shadowRoot.querySelector(`.ptz[data-ptz="${channel}"] .tile-audio`);
+      const button = audio && audio.querySelector("[data-sound]");
       if (button) {
+        audio.classList.toggle("on", heard);
         button.classList.toggle("on", heard);
         button.classList.remove("silent");
         button.innerHTML = soundIcon(heard);
@@ -3872,13 +3858,16 @@ class XmeyePanel extends HTMLElement {
               </select>
               ${
                 this._player === "native"
-                  ? `<button class="ghost icon ${this._liveSound ? "active" : ""}" id="livesound"
-                       title="${this._liveSound ? t("Sound off") : t("Sound")}"
-                       aria-label="${t("Sound")}">${soundIcon(this._liveSound)}</button>
-                     <input type="range" id="livevolume" class="live-volume" min="0" max="100"
-                       step="1" value="${this._volume(channel.index)}" ${this._liveSound ? "" : "hidden"}
-                       aria-label="${t("Volume")}"
-                       title="${t("Volume")}: ${volumeLabel(this._volume(channel.index))}">`
+                  ? `<span class="live-audio ${this._liveSound ? "on" : ""}" id="liveaudio">
+                       <button class="ghost icon ${this._liveSound ? "active" : ""}" id="livesound"
+                         title="${this._liveSound ? t("Sound off") : t("Sound")}"
+                         aria-label="${t("Sound")}">${soundIcon(this._liveSound)}</button>
+                       <span class="live-volume">
+                         <input type="range" id="livevolume" min="0" max="100" step="1"
+                           value="${this._volume(channel.index)}" aria-label="${t("Volume")}"
+                           title="${t("Volume")}: ${volumeLabel(this._volume(channel.index))}">
+                       </span>
+                     </span>`
                   : ""
               }
               <button class="ghost icon" id="diag" title="${t("Player diagnostics")}"
@@ -4295,8 +4284,6 @@ class XmeyePanel extends HTMLElement {
     if (livestream)
       livestream.addEventListener("change", () => {
         this._liveStream = livestream.value;
-        // A stream chosen by hand is the viewer's; sound going off keeps it.
-        this._streamBeforeSound = null;
         this._remountLive();
       });
 
@@ -4480,8 +4467,7 @@ class XmeyePanel extends HTMLElement {
         const context = this._liveSound ? null : this._audioContext();
         if (!this._liveSound && !context) return;
         this._liveSound = !this._liveSound;
-        // A stream that has brought no sound moves to main for it, and letting
-        // it go moves back to wherever the viewer had been.
+        // The view stays on its stream; see _toggleWallSound.
         const talking = this._native && this._native.stats.sound;
         this._noteDiag(
           "sound",
@@ -4489,23 +4475,11 @@ class XmeyePanel extends HTMLElement {
             `${talking ? `carries ${talking}` : "has brought no sound"}` +
             (context ? `; audio context ${context.state}` : "")
         );
-        if (this._liveSound && this._liveStream !== "main" && !talking) {
-          this._streamBeforeSound = this._liveStream;
-          this._liveStream = "main";
-          this._remountLive();
-          return;
-        }
-        if (!this._liveSound && this._streamBeforeSound) {
-          this._liveStream = this._streamBeforeSound;
-          this._streamBeforeSound = null;
-          this._remountLive();
-          return;
-        }
         if (this._native) {
           this._native.setSound(this._liveSound ? context : null, this._gain(this._live));
         }
-        const volume = root.getElementById("livevolume");
-        if (volume) volume.hidden = !this._liveSound;
+        const audio = root.getElementById("liveaudio");
+        if (audio) audio.classList.toggle("on", this._liveSound);
         sound.classList.toggle("active", this._liveSound);
         sound.innerHTML = soundIcon(this._liveSound);
         sound.title = this._liveSound ? t("Sound off") : t("Sound");
@@ -4772,18 +4746,37 @@ const STYLES = `
   .ptz.on .ptz-toggle { background: var(--primary-color); border-color: var(--primary-color); }
   /* Sound sits above the PTZ switch, the same size; shown on hover like it, and
      always while it is on, so a tile that is talking says which one it is. */
-  .tile-sound { position:absolute; right:8px; bottom:calc(28px + var(--k) + 6px);
-    width:var(--k); height:var(--k); opacity:0; transition: opacity .15s ease; }
-  /* The volume sits to the left of the speaker while the tile is heard and
-     the pointer is on it — a slider always on screen would cover the picture. */
-  .tile-volume { position:absolute; right:calc(8px + var(--k) + 6px);
-    bottom:calc(28px + var(--k) * 1.5 + 6px); transform:translateY(50%);
-    width:clamp(70px, 32cqw, 140px); display:none; pointer-events:auto;
+  /* The speaker and, above it, its volume — one block, so the pointer can go
+     from the button up to the slider without leaving the thing it hovers. */
+  .tile-audio { position:absolute; right:8px; bottom:calc(28px + var(--k) + 6px);
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    pointer-events:auto; }
+  .tile-sound { width:var(--k); height:var(--k); opacity:0; transition: opacity .15s ease; }
+  /* The volume stands above the speaker, upright, and only while the pointer
+     is on one of them and the tile is being heard: a slider always on screen
+     would cover the picture. Focus brings it up only from the keyboard, and on
+     a touch screen — see below: a click leaves the button focused, and the
+     slider then stayed up after the pointer had gone. */
+  .tile-volume { display:none; pointer-events:auto; padding:6px 0; border-radius:8px;
+    background: rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.22);
+    width:var(--k); justify-content:center;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+  .tile-volume input { writing-mode: vertical-lr; direction: rtl; margin:0;
+    height:clamp(56px, 38cqh, 120px); width:calc(var(--k) * .6);
     accent-color: var(--primary-color); cursor:pointer; }
-  .cell:hover .tile-sound.on ~ .tile-volume,
-  .ptz:focus-within .tile-sound.on ~ .tile-volume { display:block; }
-  .live-volume { width:110px; accent-color: var(--primary-color); }
-  .live-volume[hidden] { display:none; }
+  .tile-audio.on:hover .tile-volume, .tile-audio.on:has(:focus-visible) .tile-volume { display:flex; }
+  /* The single view's volume drops below its button — the header has nothing
+     above it — upright like the tile's, and only while the pointer is on the
+     button or the slider. The padding at its top is the bridge the pointer
+     crosses, so moving down from the button does not lose the hover. */
+  .live-audio { position:relative; display:inline-flex; }
+  .live-volume { display:none; position:absolute; top:100%; left:50%;
+    transform:translateX(-50%); padding-top:4px; z-index:5; }
+  .live-volume input { writing-mode: vertical-lr; direction: rtl; height:120px; width:22px;
+    margin:0; padding:8px 4px; box-sizing:content-box; border-radius:8px;
+    background: var(--card-background-color); border:1px solid var(--divider-color);
+    box-shadow:0 4px 14px rgba(0,0,0,.25); accent-color: var(--primary-color); cursor:pointer; }
+  .live-audio.on:hover .live-volume, .live-audio.on:has(:focus-visible) .live-volume { display:block; }
   .tile-sound.on { opacity:1; background: var(--primary-color); border-color: var(--primary-color); }
   .tile-sound.on.silent { background: rgba(0,0,0,.45); border-color: var(--warning-color, #ff9800);
     color: var(--warning-color, #ff9800); }
@@ -4812,7 +4805,10 @@ const STYLES = `
      on keeps its pad. */
   @media (hover: none) {
     .ptz-toggle, .tile-sound { opacity:.8; }
-    .tile-sound.on ~ .tile-volume { display:block; }
+    /* No hover to show the volume by: a tap on the speaker focuses it, and the
+       slider stays until a tap elsewhere takes the focus away. */
+    .tile-audio.on:focus-within .tile-volume { display:flex; }
+    .live-audio.on:focus-within .live-volume { display:block; }
     .ptz.on .ptz-pad { display:flex; }
   }
 
@@ -5025,7 +5021,6 @@ const STYLES = `
     .overlay-controls { width:100%; }
     .overlay-controls select { flex:1 1 0; min-width:0; }
     .overlay-controls { flex-wrap:wrap; }
-    .live-volume { flex:1 1 100%; width:auto; order:5; }
     .overlay-head .close { position:absolute; top:4px; right:6px; }
     .osd { white-space:pre-wrap; overflow-x:visible; padding:6px 12px; }
   }
