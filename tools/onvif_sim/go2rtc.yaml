@@ -9,11 +9,21 @@
 # without argument. A 440 Hz tone with a higher beep once a second: easy to hear
 # that it is there, and the beep shows whether sound and picture keep in step.
 
+#
+# One tone, made once, that both streams take their sound from. With a tone of
+# its own per stream, the main stream's ffmpeg sometimes never came up — go2rtc
+# started both at the moment the recorder connected, one timed out, and it was
+# not tried again while the recorder stayed connected. The recorder takes sound
+# from the main stream only, so that was a camera with no sound at all. A stream
+# read back from go2rtc itself is redialled whenever a reader needs it.
+
 streams:
+  tone:
+    - "exec:ffmpeg -hide_banner -loglevel error -re -f lavfi -i sine=frequency=440:beep_factor=2:sample_rate=8000 -c:a pcm_alaw -ar 8000 -ac 1 -f rtsp {output}"
   video_main:
-    - "exec:ffmpeg -hide_banner -loglevel error -re -f lavfi -i sine=frequency=440:beep_factor=2:sample_rate=8000 -c:a pcm_alaw -ar 8000 -ac 1 -f rtsp {output}"
+    - rtsp://127.0.0.1:8554/tone
   video_sub:
-    - "exec:ffmpeg -hide_banner -loglevel error -re -f lavfi -i sine=frequency=440:beep_factor=2:sample_rate=8000 -c:a pcm_alaw -ar 8000 -ac 1 -f rtsp {output}"
+    - rtsp://127.0.0.1:8554/tone
 
 api:
   listen: ":1984"
