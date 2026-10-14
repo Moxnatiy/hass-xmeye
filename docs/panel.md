@@ -203,6 +203,27 @@ and the integration stops the camera itself when the repeats stop for a second
 and a half. The commands use a connection of their own, so a stop never waits
 behind the poll.
 
+### Sound
+
+A speaker above the PTZ switch hears that tile; one tile at a time, so two
+cameras never talk over each other. The single-camera view has the same button
+beside the stream choice.
+
+The recorder sends a camera's sound with the main stream only — the sub stream
+arrives silent — so a tile being heard moves to main for as long as it is, and
+goes back when the sound goes off. A camera that sends nothing turns its button
+amber and says so, once enough of the stream has gone by for the absence to
+mean something.
+
+The sound is G.711, which browsers do not decode, so the panel does: two
+tables from the formulas in ITU-T G.711, then Web Audio, each block scheduled
+straight after the one before with 0.3 s held in hand for the network's
+unevenness. A queue that runs more than 1.2 s ahead — a tab in the background
+gets its blocks in bursts — is dropped and restarted rather than leaving the
+sound behind the picture for good. Every channel's sound travels on the socket
+whether heard or not: eight kilobytes a second, and a press of the button has
+it at once.
+
 ## Playback methods
 
 Switchable inside the viewer, with a technical line under the picture.

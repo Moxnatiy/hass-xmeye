@@ -311,6 +311,112 @@ export function rememberBadConfig(info, config) {
   }
 }
 
+//: Sample rates by the index the recorder writes, counted from one.
+const SAMPLE_RATES = [4000, 8000, 11025, 16000, 20000, 22050, 32000, 44100, 48000];
+
+//: Codecs by the number in an audio record's flags; see MUX_AUDIO_CODECS.
+const AUDIO_CODECS = { 1: "g711a", 2: "g711u", 3: "pcm16" };
+
+//: Sound held ahead of the moment it plays, in seconds. Blocks arrive about
+//: eight a second over a network that is not a metronome; without a margin every
+//: late one is a gap, with too much the voice trails the lips.
+const AUDIO_LEAD = 0.3;
+
+//: How far ahead the queue may run before it is thrown away and restarted. A
+//: tab in the background gets its blocks in bursts; played in order they would
+//: put the sound seconds behind the picture for good.
+const AUDIO_MAX_AHEAD = 1.2;
+
+//: Below this the browser may refuse to make a buffer at all — older Safari
+//: did, under 22.05 kHz — so slower sound is repeated up to it.
+const AUDIO_MIN_RATE = 22050;
+
+/** One G.711 A-law byte as a 16-bit sample (ITU-T G.711). */
+export function alawSample(byte) {
+  const a = byte ^ 0x55;
+  const segment = (a & 0x70) >> 4;
+  let value = (a & 0x0f) << 4;
+  if (segment === 0) value += 8;
+  else value = (value + 0x108) << (segment - 1);
+  return a & 0x80 ? value : -value;
+}
+
+/** One G.711 µ-law byte as a 16-bit sample (ITU-T G.711). */
+export function mulawSample(byte) {
+  const u = ~byte & 0xff;
+  const value = (((u & 0x0f) << 3) + 0x84) << ((u & 0x70) >> 4);
+  return u & 0x80 ? 0x84 - value : value - 0x84;
+}
+
+const ALAW = Float32Array.from({ length: 256 }, (_, i) => alawSample(i) / 32768);
+const MULAW = Float32Array.from({ length: 256 }, (_, i) => mulawSample(i) / 32768);
+
+/** A block of sound from the recorder as samples between -1 and 1. */
+export function decodeAudio(codec, bytes) {
+  if (codec === 1 || codec === 2) {
+    const table = codec === 1 ? ALAW : MULAW;
+    const out = new Float32Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) out[i] = table[bytes[i]];
+    return out;
+  }
+  if (codec === 3) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength & ~1);
+    const out = new Float32Array(view.byteLength / 2);
+    for (let i = 0; i < out.length; i++) out[i] = view.getInt16(i * 2, true) / 32768;
+    return out;
+  }
+  return null;
+}
+
+/**
+ * A camera's sound, played as it arrives.
+ *
+ * Each block is scheduled straight after the one before, so the sound is
+ * continuous however unevenly the blocks come in; the lead absorbs the
+ * unevenness. The context belongs to the panel: a browser starts one only in
+ * answer to a click, and one context serves whichever tile is being heard.
+ */
+export class AudioOut {
+  constructor(context) {
+    this.context = context;
+    this.gain = context.createGain();
+    this.gain.connect(context.destination);
+    this.at = 0;
+    this.blocks = 0;
+    this.restarts = 0;
+  }
+
+  play(codec, rate, bytes) {
+    let samples = decodeAudio(codec, bytes);
+    if (!samples || !samples.length) return;
+    let sampleRate = rate;
+    if (sampleRate < AUDIO_MIN_RATE) {
+      const factor = Math.ceil(AUDIO_MIN_RATE / sampleRate);
+      const wide = new Float32Array(samples.length * factor);
+      for (let i = 0; i < wide.length; i++) wide[i] = samples[(i / factor) | 0];
+      samples = wide;
+      sampleRate *= factor;
+    }
+    const now = this.context.currentTime;
+    if (this.at < now + 0.02 || this.at > now + AUDIO_MAX_AHEAD) {
+      if (this.blocks) this.restarts += 1;
+      this.at = now + AUDIO_LEAD;
+    }
+    const buffer = this.context.createBuffer(1, samples.length, sampleRate);
+    buffer.copyToChannel(samples, 0);
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.gain);
+    source.start(this.at);
+    this.at += samples.length / sampleRate;
+    this.blocks += 1;
+  }
+
+  close() {
+    this.gain.disconnect();
+  }
+}
+
 export class NativePlayer {
   /**
    * @param {HTMLCanvasElement} canvas where to draw
@@ -346,6 +452,8 @@ export class NativePlayer {
     this.controller = new AbortController();
     this.decoder = null;
     this.info = null;
+    //: Where the sound goes while this camera is the one being heard.
+    this.audio = null;
 
     this.stats = {
       player: "native",
@@ -359,6 +467,9 @@ export class NativePlayer {
       queue: 0,
       restarts: 0,
       error: null,
+      //: The codec of the sound the stream carries, once a block has arrived;
+      //: null for a stream with none, which is how the panel knows to say so.
+      sound: null,
     };
     this._bytes = 0;
     this._decodedSince = 0;
@@ -1177,7 +1288,31 @@ export class NativePlayer {
     this.onStats({ ...this.stats });
   }
 
+  /**
+   * A block of sound for this camera.
+   *
+   * Counted whether or not anyone is listening: that a stream carries sound is
+   * worth knowing before the button is pressed.
+   */
+  pushAudio(bytes, flags) {
+    const codec = flags & 0x0f;
+    const rate = SAMPLE_RATES[(flags >> 4) - 1];
+    if (!this.stats.sound && AUDIO_CODECS[codec]) {
+      this.stats.sound = AUDIO_CODECS[codec];
+      this.note("sound", `${AUDIO_CODECS[codec]} ${rate} Hz`);
+      queueMicrotask(() => this._publish());
+    }
+    if (this.audio && rate && !this.paused) this.audio.play(codec, rate, bytes);
+  }
+
+  /** Be heard through `context`, or stop being heard with null. */
+  setSound(context) {
+    if (this.audio) this.audio.close();
+    this.audio = context ? new AudioOut(context) : null;
+  }
+
   stop() {
+    this.setSound(null);
     clearInterval(this._tick);
     clearInterval(this._ticker);
     this.controller.abort();
@@ -1202,6 +1337,7 @@ export class NativePlayer {
 const MUX_HEADER_BYTES = 16;
 const MUX_INFO = 0;
 const MUX_FRAME = 1;
+const MUX_AUDIO = 2;
 const MUX_ERROR = 3;
 
 /**
@@ -1246,6 +1382,8 @@ class WallTransport {
       player.startFed(JSON.parse(new TextDecoder().decode(payload)));
     } else if (kind === MUX_FRAME) {
       player.pushFrame(payload, flags & 1, stamp);
+    } else if (kind === MUX_AUDIO) {
+      player.pushAudio(payload, flags);
     }
   }
 

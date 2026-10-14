@@ -142,6 +142,13 @@ def test_audio_frame_parsing() -> None:
     assert frame.payload == AUDIO_PAYLOAD
 
 
+def test_audio_codec_zero_is_alaw() -> None:
+    """What the NBD8008R-U writes for the sound of an ONVIF camera."""
+    frame = demux(audio(AUDIO_PAYLOAD, codec=0x00))[0]
+    assert frame.codec == "g711a"
+    assert frame.sample_rate == 8000
+
+
 def test_audio_frame_uses_16bit_length() -> None:
     """An audio frame carries a 2-byte length, not 4, or parsing drifts."""
     stream = audio(AUDIO_PAYLOAD) + pframe(PFRAME_PAYLOAD)

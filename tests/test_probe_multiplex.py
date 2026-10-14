@@ -114,5 +114,9 @@ def test_the_header_matches_the_server() -> None:
     assert '_MUX_HEADER = struct.Struct("<BHBId")' in server
     assert probe.MUX_HEADER.format == "<BHBId"
     assert probe.MUX_HEADER.size == struct.calcsize("<BHBId") == 16
-    assert "MUX_INFO, MUX_FRAME, MUX_ERROR = 0, 1, 3" in server
-    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_ERROR) == (0, 1, 3)
+    assert "MUX_INFO, MUX_FRAME, MUX_AUDIO, MUX_ERROR = 0, 1, 2, 3" in server
+    assert (probe.MUX_INFO, probe.MUX_FRAME, probe.MUX_AUDIO, probe.MUX_ERROR) == (0, 1, 2, 3)
+    player = (Path(__file__).resolve().parent.parent / "custom_components" / "xmeye"
+              / "panel" / "native-player.js").read_text(encoding="utf-8")
+    for name, number in (("MUX_INFO", 0), ("MUX_FRAME", 1), ("MUX_AUDIO", 2), ("MUX_ERROR", 3)):
+        assert f"const {name} = {number};" in player, f"the browser numbers {name} differently"

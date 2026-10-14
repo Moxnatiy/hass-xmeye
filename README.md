@@ -49,6 +49,8 @@ so everything stays on your network.
 - **Pan, tilt and zoom on the wall.** Point at a tile and a pad appears: hold an
   arrow to turn, click for a short step, and keep up to eight presets. A camera
   stops by itself if the browser goes quiet mid-press.
+- **Sound.** A speaker on each tile and in the single-camera view plays the
+  camera's microphone, decoded in the browser.
 - **Works on a phone.** Home Assistant's own top bar and menu button, and a
   channel list that folds away so the wall gets the width.
 

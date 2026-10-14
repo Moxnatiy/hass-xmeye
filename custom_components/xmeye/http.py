@@ -43,17 +43,32 @@ from homeassistant.core import HomeAssistant
 
 from . import debuglog
 from .const import DOMAIN, STREAM_MAIN
-from .xmeyelib import ArchiveStream, LiveStream, MediaClock, StreamType, XmeyeError
+from .xmeyelib import (
+    ArchiveStream,
+    FrameType,
+    LiveStream,
+    MediaClock,
+    MediaFrame,
+    StreamType,
+    XmeyeError,
+)
+from .xmeyelib.frames import SAMPLE_RATES
 
 _LOGGER = logging.getLogger(__name__)
 
 _FRAME_HEADER = struct.Struct("<BId")
 
 #: Multiplexed record: kind, channel, flags, payload length, timestamp.
-#: Kind 0 carries a channel's JSON stream info, kind 1 a video frame. Sixteen
-#: bytes, no padding, because the format string is little-endian throughout.
+#: Kind 0 carries a channel's JSON stream info, kind 1 a video frame, kind 2 a
+#: block of sound, kind 3 a channel's trouble. Sixteen bytes, no padding,
+#: because the format string is little-endian throughout.
 _MUX_HEADER = struct.Struct("<BHBId")
-MUX_INFO, MUX_FRAME, MUX_ERROR = 0, 1, 3
+MUX_INFO, MUX_FRAME, MUX_AUDIO, MUX_ERROR = 0, 1, 2, 3
+
+#: Sound the browser can play, by the number in the low four bits of an audio
+#: record's flags. The high four carry the sample rate's index, counted from one
+#: as the recorder counts it (see SAMPLE_RATES).
+MUX_AUDIO_CODECS = {"g711a": 1, "g711u": 2, "pcm16": 3}
 
 #: How many records may wait for the writer before a channel starts shedding.
 #: One socket carries every tile, so a camera that outruns the browser must not
@@ -407,6 +422,9 @@ class _VideoSession:
                     frame = await anext(frames, None)
                 if frame is None:
                     return
+                if frame.type is FrameType.AUDIO:
+                    self._carry_audio(channel, frame)
+                    continue
                 if not frame.is_video or not frame.has_valid_nal:
                     continue
                 if not announced:
@@ -489,6 +507,26 @@ class _VideoSession:
                             )
         finally:
             await stream.close()
+
+
+    def _carry_audio(self, channel: int, frame: MediaFrame) -> None:
+        """A block of sound, passed on as it came; the browser decodes it.
+
+        Every channel's sound travels, heard or not: G.711 is eight kilobytes a
+        second, nothing beside the video, and a tile switched to sound then has
+        it at once instead of after a round trip to ask for it. A full queue
+        drops it — a gap in the sound is a click, and nothing is worth holding
+        the recorder's connection for.
+        """
+        codec = MUX_AUDIO_CODECS.get(frame.codec)
+        if codec is None or not frame.sample_rate:
+            return
+        rate = SAMPLE_RATES.index(frame.sample_rate) + 1
+        stamp = (frame.timestamp or datetime.now()).timestamp() * 1000
+        try:
+            self.queue.put_nowait((MUX_AUDIO, channel, codec | rate << 4, stamp, frame.payload))
+        except asyncio.QueueFull:
+            pass
 
 
 class XmeyeWallSocketView(HomeAssistantView):

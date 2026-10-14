@@ -197,6 +197,15 @@ const zoomIcon = (closer) =>
       (closer ? '<path d="M7 4.9v4.2"/>' : "")
   );
 
+//: Sound: a speaker, with waves when it plays and a cross when it does not.
+const soundIcon = (on) =>
+  mark(
+    '<path d="M2.4 6h2.4L8.4 3v10L4.8 10H2.4z"/>' +
+      (on
+        ? '<path d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8"/><path d="M12.4 3.8a6 6 0 0 1 0 8.4"/>'
+        : '<path d="M10.8 6.2l3.6 3.6"/><path d="M14.4 6.2l-3.6 3.6"/>')
+  );
+
 //: Presets: a bookmark, the mark for "a place kept to come back to".
 const presetIcon = () => mark('<path d="M4.4 2.2h7.2v11.6L8 10.9l-3.6 2.9z"/>');
 
@@ -731,6 +740,16 @@ class XmeyePanel extends HTMLElement {
     this._ptzHeld = new Map();
     //: channel → the timer that ends a tap's step
     this._ptzNudges = new Map();
+    //: The wall tile being heard, if any. One at a time: two cameras talking
+    //: over each other help nobody.
+    this._soundChannel = null;
+    //: Whether the single-camera view is heard.
+    this._liveSound = false;
+    //: The stream the view was on before sound moved it to main.
+    this._streamBeforeSound = null;
+    //: The one AudioContext, made on the first press of a sound button —
+    //: browsers start one only in answer to a click.
+    this._audio = null;
     //: The chosen wall layout and page number when channels outnumber it.
     this._layout = Number(localStorage.getItem("xmeye-layout")) || 4;
     //: Whether the channel list sits beside the wall. Shown unless someone has
@@ -1175,6 +1194,7 @@ class XmeyePanel extends HTMLElement {
         { ...this._lab }
       );
       this._native = player;
+      if (this._liveSound && this._audio) player.setSound(this._audio);
 
       // One camera over the same socket the wall uses, carrying one channel.
       // Nothing about a single stream needs a second kind of transport, and one
@@ -1320,6 +1340,13 @@ class XmeyePanel extends HTMLElement {
     this._osdTimer = null;
     this._live = null;
     this._osd = null;
+    // Sound is switched on for a camera, not for the view: the next one opened
+    // starts quiet, as a camera opened unexpectedly loud is a bad surprise.
+    this._liveSound = false;
+    if (this._streamBeforeSound) {
+      this._liveStream = this._streamBeforeSound;
+      this._streamBeforeSound = null;
+    }
     this._render();
   }
 
@@ -2031,6 +2058,9 @@ class XmeyePanel extends HTMLElement {
   /** Which stream a wall tile shows. Sub by default: several 4K tiles at once
    *  overload both the browser and the recorder. */
   _wallStream(index) {
+    // The recorder sends a camera's sound with the main stream only; the sub
+    // stream arrives silent. So the tile being heard is on main while it is.
+    if (index === this._soundChannel) return "main";
     const chosen = this._loadWallPrefs().streams[index];
     return chosen === "main" ? "main" : "sub";
   }
@@ -2124,6 +2154,7 @@ class XmeyePanel extends HTMLElement {
    */
   _ptzControls(index) {
     const on = this._loadWallPrefs().ptz.includes(index);
+    const heard = index === this._soundChannel;
     const dirs = ["up_left", "up", "up_right", "left", null, "right", "down_left", "down", "down_right"];
     const pad = dirs
       .map((direction) =>
@@ -2137,6 +2168,8 @@ class XmeyePanel extends HTMLElement {
     ).join("");
     return `
       <div class="ptz ${on ? "on" : ""}" data-ptz="${index}">
+        <button class="tile-sound ${heard ? "on" : ""}" data-sound
+                title="${heard ? t("Sound off") : t("Sound")}">${soundIcon(heard)}</button>
         <button class="ptz-toggle" data-ptz-toggle
                 title="${on ? t("Hide pan, tilt and zoom") : t("Pan, tilt and zoom")}">${ptzIcon()}</button>
         <div class="ptz-pad">
@@ -2160,6 +2193,9 @@ class XmeyePanel extends HTMLElement {
       // Everything inside belongs to the pad: a press that reached the tile
       // would open the camera full screen in the middle of turning it.
       box.addEventListener("click", (event) => event.stopPropagation());
+      box.querySelector("[data-sound]").addEventListener("click", () =>
+        this._toggleWallSound(channel)
+      );
 
       box.querySelector("[data-ptz-toggle]").addEventListener("click", () => {
         const prefs = this._loadWallPrefs();
@@ -2326,6 +2362,7 @@ class XmeyePanel extends HTMLElement {
       () => this._updateWallCell(index, { error: t("could not decode") }),
       this._channelLog(index)
     );
+    if (index === this._soundChannel && this._audio) player.setSound(this._audio);
     this._wall.set(index, player);
     return player;
   }
@@ -2593,6 +2630,60 @@ class XmeyePanel extends HTMLElement {
       foot.textContent = t("connecting…");
     } else {
       foot.textContent = fmtQuality(stats);
+    }
+    // A camera that sends no sound says so on its button, once enough of the
+    // stream has gone by for the absence to mean something.
+    const button = this.shadowRoot.querySelector(`.ptz[data-ptz="${index}"] [data-sound]`);
+    if (button && index === this._soundChannel && stats.decoded > 45) {
+      button.classList.toggle("silent", !stats.sound);
+      button.title = stats.sound ? t("Sound off") : t("No sound from this camera");
+    }
+  }
+
+  /** The AudioContext, made or woken inside the click that asked for sound. */
+  _audioContext() {
+    if (!this._audio) {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) return null;
+      this._audio = new Context();
+    }
+    if (this._audio.state === "suspended") this._audio.resume();
+    return this._audio;
+  }
+
+  /**
+   * Hear a wall tile, or stop hearing it.
+   *
+   * A tile on the sub stream moves to main for as long as it is heard, since
+   * only main carries the sound; it goes back when the sound goes off.
+   */
+  _toggleWallSound(index) {
+    const before = this._soundChannel;
+    const context = index === before ? null : this._audioContext();
+    if (index !== before && !context) return;
+    const touched = [before, index].filter((c, i, all) => c !== null && all.indexOf(c) === i);
+    const streamsBefore = new Map(touched.map((c) => [c, this._wallStream(c)]));
+    this._soundChannel = context ? index : null;
+
+    for (const channel of touched) {
+      const player = this._wall.get(channel);
+      const heard = channel === this._soundChannel;
+      // The same stream keeps its player and only gains or loses the sound; a
+      // different one is a different stream from the recorder, so the tile is
+      // dialled again and the new player picks the sound up as it is made.
+      if (player && streamsBefore.get(channel) === this._wallStream(channel)) {
+        player.setSound(heard ? context : null);
+      } else {
+        this._restartWallTile(channel);
+      }
+      const box = this.shadowRoot.querySelector(`.ptz[data-ptz="${channel}"]`);
+      const button = box && box.querySelector("[data-sound]");
+      if (button) {
+        button.classList.toggle("on", heard);
+        button.classList.remove("silent");
+        button.innerHTML = soundIcon(heard);
+        button.title = heard ? t("Sound off") : t("Sound");
+      }
     }
   }
 
@@ -3702,6 +3793,13 @@ class XmeyePanel extends HTMLElement {
                 <option value="sub" ${this._liveStream === "sub" ? "selected" : ""}>${t("Extra")}</option>
                 <option value="main" ${this._liveStream === "main" ? "selected" : ""}>${t("Main")}</option>
               </select>
+              ${
+                this._player === "native"
+                  ? `<button class="ghost icon ${this._liveSound ? "active" : ""}" id="livesound"
+                       title="${this._liveSound ? t("Sound off") : t("Sound")}"
+                       aria-label="${t("Sound")}">${soundIcon(this._liveSound)}</button>`
+                  : ""
+              }
               <button class="ghost icon" id="diag" title="${t("Player diagnostics")}"
                       aria-label="${t("Player diagnostics")}">${infoIcon()}</button>
               <button class="close icon" id="closelive" title="${t("Close")}"
@@ -4116,6 +4214,8 @@ class XmeyePanel extends HTMLElement {
     if (livestream)
       livestream.addEventListener("change", () => {
         this._liveStream = livestream.value;
+        // A stream chosen by hand is the viewer's; sound going off keeps it.
+        this._streamBeforeSound = null;
         this._remountLive();
       });
 
@@ -4284,6 +4384,32 @@ class XmeyePanel extends HTMLElement {
         } catch (err) {
           copyDiag.textContent = t("Failed");
         }
+      });
+
+    const sound = root.getElementById("livesound");
+    if (sound)
+      sound.addEventListener("click", () => {
+        const context = this._liveSound ? null : this._audioContext();
+        if (!this._liveSound && !context) return;
+        this._liveSound = !this._liveSound;
+        // Sound comes only with the main stream, so asking for it moves there,
+        // and letting it go moves back to wherever the viewer had been.
+        if (this._liveSound && this._liveStream !== "main") {
+          this._streamBeforeSound = this._liveStream;
+          this._liveStream = "main";
+          this._remountLive();
+          return;
+        }
+        if (!this._liveSound && this._streamBeforeSound) {
+          this._liveStream = this._streamBeforeSound;
+          this._streamBeforeSound = null;
+          this._remountLive();
+          return;
+        }
+        if (this._native) this._native.setSound(this._liveSound ? context : null);
+        sound.classList.toggle("active", this._liveSound);
+        sound.innerHTML = soundIcon(this._liveSound);
+        sound.title = this._liveSound ? t("Sound off") : t("Sound");
       });
 
     const close = root.getElementById("closelive");
@@ -4545,6 +4671,13 @@ const STYLES = `
   .ptz-toggle { position:absolute; right:8px; bottom:28px; width:var(--k); height:var(--k);
     opacity:0; transition: opacity .15s ease; }
   .ptz.on .ptz-toggle { background: var(--primary-color); border-color: var(--primary-color); }
+  /* Sound sits above the PTZ switch, the same size; shown on hover like it, and
+     always while it is on, so a tile that is talking says which one it is. */
+  .tile-sound { position:absolute; right:8px; bottom:calc(28px + var(--k) + 6px);
+    width:var(--k); height:var(--k); opacity:0; transition: opacity .15s ease; }
+  .tile-sound.on { opacity:1; background: var(--primary-color); border-color: var(--primary-color); }
+  .tile-sound.on.silent { background: rgba(0,0,0,.45); border-color: var(--warning-color, #ff9800);
+    color: var(--warning-color, #ff9800); }
   .ptz-pad { position:absolute; left:8px; bottom:28px; display:none; gap:6px;
     align-items:flex-end; }
   .ptz-dirs { display:grid; grid-template-columns: repeat(3, var(--k)); gap:3px; }
@@ -4563,12 +4696,13 @@ const STYLES = `
   .ptz .done { background: var(--success-color, #43a047); }
   .ptz.failed .ptz-pad button { border-color: var(--error-color, #f44336); }
   /* Shown while the pointer is on the tile, or a key in it has focus. */
-  .cell:hover .ptz-toggle, .ptz:focus-within .ptz-toggle { opacity:1; }
+  .cell:hover .ptz-toggle, .ptz:focus-within .ptz-toggle,
+  .cell:hover .tile-sound, .ptz:focus-within .tile-sound { opacity:1; }
   .cell:hover .ptz.on .ptz-pad, .ptz.on:focus-within .ptz-pad { display:flex; }
   /* A touch screen has no hover: the switch stays in sight, and a tile switched
      on keeps its pad. */
   @media (hover: none) {
-    .ptz-toggle { opacity:.8; }
+    .ptz-toggle, .tile-sound { opacity:.8; }
     .ptz.on .ptz-pad { display:flex; }
   }
 
@@ -4762,6 +4896,10 @@ const STYLES = `
   .overlay-controls select { padding:4px 8px; font-size:12px; }
   canvas.live { width:100%; display:block; background:#000; }
   .close.icon { display:flex; align-items:center; justify-content:center; padding:7px; }
+  .overlay-controls button.icon { display:flex; align-items:center; justify-content:center;
+    padding:5px 7px; }
+  .overlay-controls button.active { background: var(--primary-color);
+    color: var(--text-primary-color,#fff); border-color: var(--primary-color); }
 
   /* A phone: the camera takes the whole screen, as a phone's own camera view
      does. The two selects and two buttons are wider than the screen, and in one

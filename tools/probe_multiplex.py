@@ -31,7 +31,7 @@ import time
 
 #: Mirrors _MUX_HEADER in custom_components/xmeye/http.py.
 MUX_HEADER = struct.Struct("<BHBId")
-MUX_INFO, MUX_FRAME, MUX_ERROR = 0, 1, 3
+MUX_INFO, MUX_FRAME, MUX_AUDIO, MUX_ERROR = 0, 1, 2, 3
 
 #: A gap longer than this is worth naming: a camera at 10 fps still owes a frame
 #: every 100 ms, so a second of silence is a stall rather than jitter.

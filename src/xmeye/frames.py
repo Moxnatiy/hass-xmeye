@@ -67,7 +67,12 @@ VIDEO_CODECS = {0x01: "mpeg4", 0x02: "h264", 0x03: "h265"}
 #: Audio codec: the low four bits of byte ``T``.
 #: Numbering taken from Xiongmai firmware: PCM8=7, G729=8, IMA_ADPCM=9,
 #: G711U=10, G721=11, PCM8_VWIS=12, MS_ADPCM=13, G711A=14, PCM16=15.
+#:
+#: 0 is not in the firmware's table, and it is what the NBD8008R-U writes for the
+#: sound it relays from an ONVIF camera. That sound is G.711 A-law: decoded as
+#: A-law, a capture from the simulator is its 440 Hz tone exactly.
 AUDIO_CODECS = {
+    0x00: "g711a",
     0x07: "pcm8",
     0x08: "g729",
     0x09: "ima_adpcm",
