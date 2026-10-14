@@ -32,10 +32,24 @@ i18nModule.then((module) => {
 
 let NativePlayer = null;
 let nativeSupported = typeof VideoDecoder !== "undefined";
+//: The volume control's curve; see native-player.js. A plain line until the
+//: module arrives, which is long before anyone can press a sound button.
+let volumeGain = (position) => position / 50;
+let VOLUME_DEFAULT = 50;
 nativeModule.then((module) => {
   NativePlayer = module.NativePlayer;
   nativeSupported = module.nativePlayerSupported();
+  volumeGain = module.volumeGain;
+  VOLUME_DEFAULT = module.VOLUME_DEFAULT;
 });
+
+/** A volume position as the viewer reads it: off, or decibels from as-is. */
+const volumeLabel = (position) => {
+  const gain = volumeGain(position);
+  if (gain <= 0) return t("Muted");
+  const db = Math.round(20 * Math.log10(gain));
+  return `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db)} dB`;
+};
 
 const nativePlayerSupported = () => nativeSupported;
 
@@ -1196,7 +1210,7 @@ class XmeyePanel extends HTMLElement {
         { ...this._lab }
       );
       this._native = player;
-      if (this._liveSound && this._audio) player.setSound(this._audio);
+      if (this._liveSound && this._audio) player.setSound(this._audio, this._gain(channel));
 
       // One camera over the same socket the wall uses, carrying one channel.
       // Nothing about a single stream needs a second kind of transport, and one
@@ -2172,6 +2186,9 @@ class XmeyePanel extends HTMLElement {
       <div class="ptz ${on ? "on" : ""}" data-ptz="${index}">
         <button class="tile-sound ${heard ? "on" : ""}" data-sound
                 title="${heard ? t("Sound off") : t("Sound")}">${soundIcon(heard)}</button>
+        <input class="tile-volume" type="range" min="0" max="100" step="1" data-volume
+               value="${this._volume(index)}" aria-label="${t("Volume")}"
+               title="${t("Volume")}: ${volumeLabel(this._volume(index))}">
         <button class="ptz-toggle" data-ptz-toggle
                 title="${on ? t("Hide pan, tilt and zoom") : t("Pan, tilt and zoom")}">${ptzIcon()}</button>
         <div class="ptz-pad">
@@ -2198,6 +2215,11 @@ class XmeyePanel extends HTMLElement {
       box.querySelector("[data-sound]").addEventListener("click", () =>
         this._toggleWallSound(channel)
       );
+      const volume = box.querySelector("[data-volume]");
+      volume.addEventListener("input", () => {
+        this._setVolume(channel, volume.value);
+        volume.title = `${t("Volume")}: ${volumeLabel(volume.value)}`;
+      });
 
       box.querySelector("[data-ptz-toggle]").addEventListener("click", () => {
         const prefs = this._loadWallPrefs();
@@ -2364,7 +2386,7 @@ class XmeyePanel extends HTMLElement {
       () => this._updateWallCell(index, { error: t("could not decode") }),
       this._channelLog(index)
     );
-    if (index === this._soundChannel && this._audio) player.setSound(this._audio);
+    if (index === this._soundChannel && this._audio) player.setSound(this._audio, this._gain(index));
     this._wall.set(index, player);
     return player;
   }
@@ -2642,6 +2664,42 @@ class XmeyePanel extends HTMLElement {
     }
   }
 
+  /**
+   * The volume control's position for a channel, 0 to 100.
+   *
+   * Per channel and per recorder, and shared between the tile and the single
+   * view: it is the camera's microphone that is quiet or loud, not the view.
+   */
+  _volume(index) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(`xmeye-volume-${this._entryId}`)) || {};
+      const value = Number(stored[index]);
+      return Number.isFinite(value) && index in stored ? value : VOLUME_DEFAULT;
+    } catch (err) {
+      return VOLUME_DEFAULT;
+    }
+  }
+
+  _gain(index) {
+    return volumeGain(this._volume(index));
+  }
+
+  /** Set a channel's volume, and let whatever is playing it hear at once. */
+  _setVolume(index, position) {
+    const key = `xmeye-volume-${this._entryId}`;
+    try {
+      const stored = JSON.parse(localStorage.getItem(key)) || {};
+      stored[index] = Number(position);
+      localStorage.setItem(key, JSON.stringify(stored));
+    } catch (err) {
+      /* storage refused: the change still applies to what is playing */
+    }
+    const gain = volumeGain(position);
+    const tile = this._wall.get(index);
+    if (tile && index === this._soundChannel) tile.setGain(gain);
+    if (this._native && this._live === index && this._liveSound) this._native.setGain(gain);
+  }
+
   /** The AudioContext, made or woken inside the click that asked for sound. */
   _audioContext() {
     if (!this._audio) {
@@ -2691,7 +2749,7 @@ class XmeyePanel extends HTMLElement {
       // different one is a different stream from the recorder, so the tile is
       // dialled again and the new player picks the sound up as it is made.
       if (player && streamsBefore.get(channel) === this._wallStream(channel)) {
-        player.setSound(heard ? context : null);
+        player.setSound(heard ? context : null, this._gain(channel));
       } else {
         this._restartWallTile(channel);
       }
@@ -3816,7 +3874,11 @@ class XmeyePanel extends HTMLElement {
                 this._player === "native"
                   ? `<button class="ghost icon ${this._liveSound ? "active" : ""}" id="livesound"
                        title="${this._liveSound ? t("Sound off") : t("Sound")}"
-                       aria-label="${t("Sound")}">${soundIcon(this._liveSound)}</button>`
+                       aria-label="${t("Sound")}">${soundIcon(this._liveSound)}</button>
+                     <input type="range" id="livevolume" class="live-volume" min="0" max="100"
+                       step="1" value="${this._volume(channel.index)}" ${this._liveSound ? "" : "hidden"}
+                       aria-label="${t("Volume")}"
+                       title="${t("Volume")}: ${volumeLabel(this._volume(channel.index))}">`
                   : ""
               }
               <button class="ghost icon" id="diag" title="${t("Player diagnostics")}"
@@ -4405,6 +4467,13 @@ class XmeyePanel extends HTMLElement {
         }
       });
 
+    const liveVolume = root.getElementById("livevolume");
+    if (liveVolume)
+      liveVolume.addEventListener("input", () => {
+        this._setVolume(this._live, liveVolume.value);
+        liveVolume.title = `${t("Volume")}: ${volumeLabel(liveVolume.value)}`;
+      });
+
     const sound = root.getElementById("livesound");
     if (sound)
       sound.addEventListener("click", () => {
@@ -4432,7 +4501,11 @@ class XmeyePanel extends HTMLElement {
           this._remountLive();
           return;
         }
-        if (this._native) this._native.setSound(this._liveSound ? context : null);
+        if (this._native) {
+          this._native.setSound(this._liveSound ? context : null, this._gain(this._live));
+        }
+        const volume = root.getElementById("livevolume");
+        if (volume) volume.hidden = !this._liveSound;
         sound.classList.toggle("active", this._liveSound);
         sound.innerHTML = soundIcon(this._liveSound);
         sound.title = this._liveSound ? t("Sound off") : t("Sound");
@@ -4701,6 +4774,16 @@ const STYLES = `
      always while it is on, so a tile that is talking says which one it is. */
   .tile-sound { position:absolute; right:8px; bottom:calc(28px + var(--k) + 6px);
     width:var(--k); height:var(--k); opacity:0; transition: opacity .15s ease; }
+  /* The volume sits to the left of the speaker while the tile is heard and
+     the pointer is on it — a slider always on screen would cover the picture. */
+  .tile-volume { position:absolute; right:calc(8px + var(--k) + 6px);
+    bottom:calc(28px + var(--k) * 1.5 + 6px); transform:translateY(50%);
+    width:clamp(70px, 32cqw, 140px); display:none; pointer-events:auto;
+    accent-color: var(--primary-color); cursor:pointer; }
+  .cell:hover .tile-sound.on ~ .tile-volume,
+  .ptz:focus-within .tile-sound.on ~ .tile-volume { display:block; }
+  .live-volume { width:110px; accent-color: var(--primary-color); }
+  .live-volume[hidden] { display:none; }
   .tile-sound.on { opacity:1; background: var(--primary-color); border-color: var(--primary-color); }
   .tile-sound.on.silent { background: rgba(0,0,0,.45); border-color: var(--warning-color, #ff9800);
     color: var(--warning-color, #ff9800); }
@@ -4729,6 +4812,7 @@ const STYLES = `
      on keeps its pad. */
   @media (hover: none) {
     .ptz-toggle, .tile-sound { opacity:.8; }
+    .tile-sound.on ~ .tile-volume { display:block; }
     .ptz.on .ptz-pad { display:flex; }
   }
 
@@ -4940,6 +5024,8 @@ const STYLES = `
     .overlay-head > span { padding-right:40px; }
     .overlay-controls { width:100%; }
     .overlay-controls select { flex:1 1 0; min-width:0; }
+    .overlay-controls { flex-wrap:wrap; }
+    .live-volume { flex:1 1 100%; width:auto; order:5; }
     .overlay-head .close { position:absolute; top:4px; right:6px; }
     .osd { white-space:pre-wrap; overflow-x:visible; padding:6px 12px; }
   }

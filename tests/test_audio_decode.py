@@ -95,3 +95,32 @@ def alaw_encode(sample: int) -> int:
         exponent = magnitude.bit_length() - 5
         code = (exponent << 4) | ((magnitude >> exponent) & 0x0F)
     return (code | sign) ^ 0x55
+
+
+def test_the_volume_curve() -> None:
+    """Silent at the bottom, as-is in the middle, +30 dB at the top.
+
+    Linear below the middle and even in decibels above it; the ends are
+    clamped, so a stored value from a wider control cannot ask for more.
+    """
+    got = run(
+        "console.log(JSON.stringify([-10, 0, 25, 50, 75, 100, 150].map(m.volumeGain)));"
+    )
+    expected = [0, 0, 0.5, 1, 10 ** (15 / 20), 10 ** (30 / 20), 10 ** (30 / 20)]
+    assert got == pytest.approx(expected, rel=1e-9)
+
+
+def test_the_limiter_passes_quiet_sound_and_caps_loud() -> None:
+    """Untouched below the knee, never past full scale above it.
+
+    The browser's own compressor was tried first and lifted quiet sound by
+    three decibels with its make-up gain, so "untouched" is checked exactly.
+    """
+    got = run(
+        "const xs = [0, 0.1, -0.5, 0.7, 0.71, 0.9, 1, 2, 16, -40, 1000];"
+        "console.log(JSON.stringify(xs.map(m.softLimit)));"
+    )
+    assert got[:4] == [0, 0.1, -0.5, 0.7]
+    assert all(abs(y) <= 1 for y in got)
+    assert got[4] < got[5] < got[6] < got[7] <= got[8] == 1
+    assert got[9] == -1

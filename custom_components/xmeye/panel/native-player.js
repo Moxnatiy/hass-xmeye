@@ -331,6 +331,47 @@ const AUDIO_MAX_AHEAD = 1.2;
 //: did, under 22.05 kHz — so slower sound is repeated up to it.
 const AUDIO_MIN_RATE = 22050;
 
+//: The volume control's travel: 0 is silent, the middle is the camera as it
+//: is, and the top is this many decibels of boost. Recorders pass on what the
+//: camera's microphone gives, and a cheap one indoors peaks around -48 dBFS —
+//: there, as it is, means inaudible. Thirty decibels brings that to speech.
+export const VOLUME_BOOST_DB = 30;
+export const VOLUME_DEFAULT = 50;
+
+/**
+ * The gain for a position of the volume control, 0 to 100.
+ *
+ * Linear up to the middle, where a slider feels natural for turning down, and
+ * in decibels above it, where a boost is heard as even steps only on a log
+ * scale.
+ */
+export function volumeGain(position) {
+  const v = Math.max(0, Math.min(100, Number(position)));
+  if (v <= 50) return v / 50;
+  return 10 ** ((((v - 50) / 50) * VOLUME_BOOST_DB) / 20);
+}
+
+//: The soft limiter's shape: below KNEE a sample passes untouched; above it the
+//: curve bends smoothly towards full scale and never reaches past it.
+const LIMIT_KNEE = 0.7;
+//: How far beyond full scale the limiter's input reaches. A WaveShaper reads
+//: its input as -1..1 and clamps the rest, so the signal is scaled down by this
+//: on the way in and the curve maps the whole range back.
+const LIMIT_RANGE = 40;
+const LIMIT_POINTS = 16384;
+
+/** One sample through the soft limiter. */
+export function softLimit(x) {
+  const magnitude = Math.abs(x);
+  if (magnitude <= LIMIT_KNEE) return x;
+  const room = 1 - LIMIT_KNEE;
+  return Math.sign(x) * (LIMIT_KNEE + room * Math.tanh((magnitude - LIMIT_KNEE) / room));
+}
+
+const LIMIT_CURVE = Float32Array.from({ length: LIMIT_POINTS }, (_, i) =>
+  softLimit(((i / (LIMIT_POINTS - 1)) * 2 - 1) * LIMIT_RANGE)
+);
+
 /** One G.711 A-law byte as a 16-bit sample (ITU-T G.711). */
 export function alawSample(byte) {
   const a = byte ^ 0x55;
@@ -377,10 +418,26 @@ export function decodeAudio(codec, bytes) {
  * answer to a click, and one context serves whichever tile is being heard.
  */
 export class AudioOut {
-  constructor(context) {
+  constructor(context, gain = 1) {
     this.context = context;
     this.gain = context.createGain();
-    this.gain.connect(context.destination);
+    this.gain.gain.value = gain;
+    // A limiter after the gain: boosted thirty decibels, a door slam or a shout
+    // would clip into a crack that hurts. A soft curve rather than the browser's
+    // compressor, which adds make-up gain of its own — it lifted quiet sound by
+    // three decibels and more, and still let a boosted beep through at 1.4.
+    // Below the knee this passes every sample unchanged.
+    this.scale = context.createGain();
+    this.scale.gain.value = 1 / LIMIT_RANGE;
+    this.limiter = context.createWaveShaper();
+    this.limiter.curve = LIMIT_CURVE;
+    // No oversampling: its filters ring on a steep edge, and a boosted beep
+    // came out at 1.14 through "2x". Without it every output is a point on the
+    // curve, and the curve never leaves -1..1.
+    this.limiter.oversample = "none";
+    this.gain.connect(this.scale);
+    this.scale.connect(this.limiter);
+    this.limiter.connect(context.destination);
     this.at = 0;
     this.blocks = 0;
     this.restarts = 0;
@@ -412,8 +469,15 @@ export class AudioOut {
     this.blocks += 1;
   }
 
+  /** Change the volume, smoothly: a jump in gain is a click. */
+  setGain(gain) {
+    this.gain.gain.setTargetAtTime(gain, this.context.currentTime, 0.03);
+  }
+
   close() {
     this.gain.disconnect();
+    this.scale.disconnect();
+    this.limiter.disconnect();
   }
 }
 
@@ -1326,8 +1390,8 @@ export class NativePlayer {
     }
   }
 
-  /** Be heard through `context`, or stop being heard with null. */
-  setSound(context) {
+  /** Be heard through `context` at `gain`, or stop being heard with null. */
+  setSound(context, gain = 1) {
     if (this.audio) {
       this.note(
         "sound off",
@@ -1335,14 +1399,20 @@ export class NativePlayer {
       );
       this.audio.close();
     }
-    this.audio = context ? new AudioOut(context) : null;
+    this.audio = context ? new AudioOut(context, gain) : null;
     if (context) {
       this.note(
         "sound on",
-        `context ${context.state} at ${context.sampleRate} Hz; stream carries ` +
+        `context ${context.state} at ${context.sampleRate} Hz, gain ${gain.toFixed(2)}; ` +
+          `stream carries ` +
           `${this.stats.sound || "no sound so far"}`
       );
     }
+  }
+
+  /** The volume of the sound being heard; nothing when none is. */
+  setGain(gain) {
+    if (this.audio) this.audio.setGain(gain);
   }
 
   stop() {

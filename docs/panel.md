@@ -218,6 +218,17 @@ played all go to the client log. A camera that sends nothing turns its button
 amber and says so, once enough of the stream has gone by for the absence to
 mean something.
 
+A volume control appears beside the speaker while a tile is heard, and beside
+the sound button in the single-camera view. It runs from silent through the
+camera as it is, in the middle, to 30 dB of boost at the top — a cheap
+microphone indoors peaks around -48 dBFS, inaudible as it is. Linear below the
+middle and even in decibels above it. The position is kept per channel and
+shared by the tile and the single view. After the gain a soft limiter passes
+every sample under 0.7 unchanged and bends the rest towards full scale, so a
+boosted shout does not crack; the browser's own compressor was tried and added
+make-up gain of its own, lifting quiet sound and still letting a boosted beep
+through at 1.4.
+
 The sound is G.711, which browsers do not decode, so the panel does: two
 tables from the formulas in ITU-T G.711, then Web Audio, each block scheduled
 straight after the one before with 0.3 s held in hand for the network's
