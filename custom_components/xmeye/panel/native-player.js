@@ -1302,13 +1302,47 @@ export class NativePlayer {
       this.note("sound", `${AUDIO_CODECS[codec]} ${rate} Hz`);
       queueMicrotask(() => this._publish());
     }
-    if (this.audio && rate && !this.paused) this.audio.play(codec, rate, bytes);
+    if (!this.audio || !rate || this.paused) return;
+    // A context that a browser holds suspended plays nothing and says nothing;
+    // ask once more, and put it in the log either way.
+    if (this.audio.context.state !== "running" && !this.audio.nudged) {
+      this.audio.nudged = true;
+      this.note("sound", `audio context ${this.audio.context.state}, resuming`);
+      this.audio.context.resume().catch((err) => this.note("sound", `resume failed: ${err}`));
+    }
+    try {
+      this.audio.play(codec, rate, bytes);
+    } catch (err) {
+      if (!this.audio.failed) this.note("sound failed", String(err.message || err));
+      this.audio.failed = true;
+      return;
+    }
+    if (this.audio.blocks === 1) {
+      this.note(
+        "sound playing",
+        `first block ${bytes.length} B of ${AUDIO_CODECS[codec]} at ${rate} Hz, ` +
+          `context ${this.audio.context.state}`
+      );
+    }
   }
 
   /** Be heard through `context`, or stop being heard with null. */
   setSound(context) {
-    if (this.audio) this.audio.close();
+    if (this.audio) {
+      this.note(
+        "sound off",
+        `${this.audio.blocks} blocks played, ${this.audio.restarts} queue restarts`
+      );
+      this.audio.close();
+    }
     this.audio = context ? new AudioOut(context) : null;
+    if (context) {
+      this.note(
+        "sound on",
+        `context ${context.state} at ${context.sampleRate} Hz; stream carries ` +
+          `${this.stats.sound || "no sound so far"}`
+      );
+    }
   }
 
   stop() {

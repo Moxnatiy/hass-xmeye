@@ -209,9 +209,12 @@ A speaker above the PTZ switch hears that tile; one tile at a time, so two
 cameras never talk over each other. The single-camera view has the same button
 beside the stream choice.
 
-The recorder sends a camera's sound with the main stream only — the sub stream
-arrives silent — so a tile being heard moves to main for as long as it is, and
-goes back when the sound goes off. A camera that sends nothing turns its button
+Recorders differ in which streams carry the sound: the dev recorder relayed an
+ONVIF camera's sound on main only, while a user's sixteen-channel recorder sends
+it on every sub stream. So a tile moves to main only when the stream it is on
+has brought no sound, for as long as it is heard, and goes back when the sound
+goes off. Switching sound on and off, the audio context's state and the blocks
+played all go to the client log. A camera that sends nothing turns its button
 amber and says so, once enough of the stream has gone by for the absence to
 mean something.
 

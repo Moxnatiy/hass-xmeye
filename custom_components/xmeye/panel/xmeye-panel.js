@@ -743,6 +743,8 @@ class XmeyePanel extends HTMLElement {
     //: The wall tile being heard, if any. One at a time: two cameras talking
     //: over each other help nobody.
     this._soundChannel = null;
+    //: Whether the tile being heard was moved to main for its sound.
+    this._soundOnMain = false;
     //: Whether the single-camera view is heard.
     this._liveSound = false;
     //: The stream the view was on before sound moved it to main.
@@ -2058,9 +2060,9 @@ class XmeyePanel extends HTMLElement {
   /** Which stream a wall tile shows. Sub by default: several 4K tiles at once
    *  overload both the browser and the recorder. */
   _wallStream(index) {
-    // The recorder sends a camera's sound with the main stream only; the sub
-    // stream arrives silent. So the tile being heard is on main while it is.
-    if (index === this._soundChannel) return "main";
+    // Heard on a stream that brought no sound, the tile is on main while it is
+    // heard — see _toggleWallSound.
+    if (index === this._soundChannel && this._soundOnMain) return "main";
     const chosen = this._loadWallPrefs().streams[index];
     return chosen === "main" ? "main" : "sub";
   }
@@ -2654,16 +2656,33 @@ class XmeyePanel extends HTMLElement {
   /**
    * Hear a wall tile, or stop hearing it.
    *
-   * A tile on the sub stream moves to main for as long as it is heard, since
-   * only main carries the sound; it goes back when the sound goes off.
+   * Some recorders send sound with every stream and some with the main one
+   * only — the dev recorder relays an ONVIF camera's sound on main alone, while
+   * a user's sixteen-channel one sends it on every sub stream. So a tile moves
+   * to main only when the stream it is on has brought no sound, and goes back
+   * when the sound goes off; a tile whose sub stream talks stays where it is.
    */
   _toggleWallSound(index) {
     const before = this._soundChannel;
     const context = index === before ? null : this._audioContext();
-    if (index !== before && !context) return;
+    if (index !== before && !context) {
+      this._noteDiag("sound", `ch${index}: this browser has no Web Audio`);
+      return;
+    }
     const touched = [before, index].filter((c, i, all) => c !== null && all.indexOf(c) === i);
     const streamsBefore = new Map(touched.map((c) => [c, this._wallStream(c)]));
+    const heardPlayer = context && this._wall.get(index);
+    this._soundOnMain = Boolean(context) && !(heardPlayer && heardPlayer.stats.sound);
     this._soundChannel = context ? index : null;
+    this._noteDiag(
+      "sound",
+      context
+        ? `ch${index} on: ${heardPlayer && heardPlayer.stats.sound
+            ? `its ${streamsBefore.get(index)} stream carries ${heardPlayer.stats.sound}`
+            : `no sound seen on ${streamsBefore.get(index)}, moving to main`}; ` +
+          `audio context ${context.state}, ${context.sampleRate} Hz`
+        : `ch${index} off`
+    );
 
     for (const channel of touched) {
       const player = this._wall.get(channel);
@@ -4392,9 +4411,16 @@ class XmeyePanel extends HTMLElement {
         const context = this._liveSound ? null : this._audioContext();
         if (!this._liveSound && !context) return;
         this._liveSound = !this._liveSound;
-        // Sound comes only with the main stream, so asking for it moves there,
-        // and letting it go moves back to wherever the viewer had been.
-        if (this._liveSound && this._liveStream !== "main") {
+        // A stream that has brought no sound moves to main for it, and letting
+        // it go moves back to wherever the viewer had been.
+        const talking = this._native && this._native.stats.sound;
+        this._noteDiag(
+          "sound",
+          `single view ${this._liveSound ? "on" : "off"}, ${this._liveStream} stream ` +
+            `${talking ? `carries ${talking}` : "has brought no sound"}` +
+            (context ? `; audio context ${context.state}` : "")
+        );
+        if (this._liveSound && this._liveStream !== "main" && !talking) {
           this._streamBeforeSound = this._liveStream;
           this._liveStream = "main";
           this._remountLive();
