@@ -66,6 +66,31 @@ painted is written back exactly as it was read, so one set to the minute in the
 recorder's own menu is not rounded to half hours by being looked at. The grid
 arithmetic lives in `schedule.js`, a module of its own, so the tests run it.
 
+The detectors (motion, covered camera, video loss) have a week of their own,
+`EventHandler.TimeSection`: the same seven days of six periods, without masks —
+a period is on or off — painted with the same grid. Their unused periods are
+spelt `0 00:00:00-24:00:00` where the record schedule writes
+`0 00:00:00-00:00:00`, and a rebuilt day keeps its section's own spelling.
+
+**IP cameras** (Channels → IP cameras) is `NetWork.RemoteDeviceV3`: one entry
+per channel, its camera in `Decoder[0]` — address, port, protocol (`ONVIF`,
+`TCP` for Xiongmai's own NETIP, `RTSP`), user and password, the stream to
+record (`MAIN` or `2END`), the device type. The list shows every channel with
+the state from `NetWork.ChnStatus`; empty channels fold into one line with an
+"Add a camera" button. Only the open channel's entry is written, as
+`NetWork.RemoteDeviceV3.[N]`, never the other thirty-one. A camera is added
+with the shape the recorder writes for one it found itself, and removed by
+writing the shape of an empty channel — `Decoder: null`,
+`SingleConnId: 0x00000000`. An address that does not look like one is refused
+before it is sent. The state is read again a few seconds after a save, when
+the recorder has had time to reach the camera.
+
+Passwords never reach the panel: sections are masked on the way out (`***`),
+and a password field shows empty — "unchanged". Since the panel sends a
+section back whole, the integration replaces every mask with what the recorder
+holds before writing (`masking.py`); a typed password goes through. Before this
+existed, saving the time-server page wrote `***` as the NTP server's password.
+
 Every page with a camera selector can copy the open camera's settings to
 others: ticked cameras receive every value of the page as the open camera has
 it — not only the edits — on Save, and the rest of the array is sent back as it

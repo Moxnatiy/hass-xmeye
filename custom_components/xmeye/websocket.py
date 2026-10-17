@@ -26,6 +26,7 @@ from .const import (
     STREAM_SUB,
 )
 from .coordinator import XmeyeCoordinator
+from .masking import mask, unmask
 from .ptz import HOLD_REPEAT
 from .report import enabled_capabilities, format_report, redact
 from .xmeyelib import PtzCommand, XmeyeError, needs_restart
@@ -186,7 +187,12 @@ async def ws_config_set(
     section = msg["section"]
     try:
         async with coordinator.lock:
-            reply = await coordinator.client.set_config(section, msg["value"])
+            # The panel only ever saw the secrets masked, and sends the section
+            # back with the masks in it; written as it came, a camera's password
+            # would become "***". What the recorder holds now goes back in.
+            current = await coordinator.client.get_config(section, check=False)
+            value = unmask(msg["value"], current)
+            reply = await coordinator.client.set_config(section, value)
             stored = await coordinator.client.get_config(section, check=False)
     except XmeyeError as err:
         connection.send_error(msg["id"], "write_failed", str(err))
@@ -199,7 +205,7 @@ async def ws_config_set(
     # so the panel must not call it rejected; it is told which it was.
     connection.send_result(
         msg["id"],
-        {"section": section, "value": stored, "restart": needs_restart(reply)},
+        {"section": section, "value": mask(stored), "restart": needs_restart(reply)},
     )
 
 
@@ -533,9 +539,7 @@ async def ws_config_get(
     except XmeyeError as err:
         connection.send_error(msg["id"], "config_failed", str(err))
         return
-    connection.send_result(
-        msg["id"], {"section": msg["section"], "value": _redact(value)}
-    )
+    connection.send_result(msg["id"], {"section": msg["section"], "value": mask(value)})
 
 
 @websocket_api.websocket_command(
@@ -576,21 +580,6 @@ async def ws_log(
             ]
         },
     )
-
-
-#: Keys whose values must never reach the interface. The Sofia password hash is
-#: equivalent to the password: it can be used to log in directly.
-_SECRET_HINTS = ("password", "passwd", "secret", "key", "token", "serialno", "uuid")
-
-
-def _redact(value: Any, key: str = "") -> Any:
-    if key and any(hint in key.lower() for hint in _SECRET_HINTS):
-        return "***"
-    if isinstance(value, dict):
-        return {k: _redact(v, k) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact(v, key) for v in value]
-    return value
 
 
 def _iso(value: datetime | None) -> str | None:

@@ -354,6 +354,12 @@ const RECORD_BRUSHES = [
   { mask: 0, label: "Nothing", kind: "none" },
 ];
 
+//: A detector's schedule only says when it is on.
+const DETECT_BRUSHES = [
+  { mask: 1, label: "Active", kind: "active" },
+  { mask: 0, label: "Off", kind: "none" },
+];
+
 const SETTINGS_TREE = [
   {
     id: "recording",
@@ -381,7 +387,7 @@ const SETTINGS_TREE = [
                 hint: "Only matters with a disk set as redundant" },
             ],
           },
-          { title: "Week", schedule: true },
+          { title: "Week", schedule: "record", periods: "TimeSection", masks: "Mask" },
         ],
       },
     ],
@@ -516,6 +522,7 @@ const SETTINGS_TREE = [
         title: "Motion",
         section: "Detect.MotionDetect",
         perChannel: true,
+        extraKeys: ["EventHandler.TimeSection"],
         hint: "Motion in the picture, and what the recorder does about it. The detection area is kept as it is; it is drawn on a grid in the recorder's own menu.",
         cards: [
           {
@@ -528,6 +535,7 @@ const SETTINGS_TREE = [
             ],
           },
           { title: "When it detects motion", fields: EVENT_REACTIONS },
+          { title: "When it is on", schedule: "detect", periods: "EventHandler.TimeSection" },
         ],
       },
       {
@@ -535,6 +543,7 @@ const SETTINGS_TREE = [
         title: "Camera covered",
         section: "Detect.BlindDetect",
         perChannel: true,
+        extraKeys: ["EventHandler.TimeSection"],
         hint: "A camera that is covered, sprayed or turned to the wall.",
         cards: [
           {
@@ -547,6 +556,7 @@ const SETTINGS_TREE = [
             ],
           },
           { title: "When a camera is covered", fields: EVENT_REACTIONS },
+          { title: "When it is on", schedule: "detect", periods: "EventHandler.TimeSection" },
         ],
       },
       {
@@ -554,6 +564,7 @@ const SETTINGS_TREE = [
         title: "Video loss",
         section: "Detect.LossDetect",
         perChannel: true,
+        extraKeys: ["EventHandler.TimeSection"],
         hint: "A camera that stops sending a picture: unplugged, powered off, or gone from the network.",
         cards: [
           {
@@ -561,6 +572,7 @@ const SETTINGS_TREE = [
             fields: [{ key: "Enable", label: "Detect video loss", type: "toggle" }],
           },
           { title: "When the picture is lost", fields: EVENT_REACTIONS },
+          { title: "When it is on", schedule: "detect", periods: "EventHandler.TimeSection" },
         ],
       },
     ],
@@ -569,6 +581,53 @@ const SETTINGS_TREE = [
     id: "channels",
     title: "Channels",
     pages: [
+      {
+        id: "cameras",
+        title: "IP cameras",
+        section: "NetWork.RemoteDeviceV3",
+        perChannel: true,
+        // One channel's entry is written, not all of them: a camera changed on
+        // channel 3 has no business rewriting the other thirty-one.
+        writeEntry: true,
+        noCopy: true,
+        status: "NetWork.ChnStatus",
+        hint: "The network cameras the recorder pulls video from, one per channel. Pick a channel in the list to change its camera, or an empty one to add a camera.",
+        cards: [
+          { title: "Channels", cameras: true },
+          {
+            title: "Camera",
+            camera: true,
+            fields: [
+              { key: "Decoder.0.Enable", label: "Use this camera", type: "toggle" },
+              { key: "Decoder.0.ConfName", label: "Name", type: "text" },
+              { key: "Decoder.0.Protocol", label: "Protocol", type: "select",
+                options: [["ONVIF", "ONVIF"], ["TCP", "Xiongmai (NETIP)"], ["RTSP", "RTSP"]] },
+              { key: "Decoder.0.IPAddress", label: "Address", type: "text",
+                pattern: "^[A-Za-z0-9.-]+$", hint: "The camera's IP address" },
+              { key: "Decoder.0.Port", label: "Port", type: "number", min: 1, max: 65535,
+                hint: "Usually 80 for ONVIF, 34567 for Xiongmai, 554 for RTSP" },
+              { key: "Decoder.0.UserName", label: "User name", type: "text" },
+              { key: "Decoder.0.PassWord", label: "Password", type: "password" },
+            ],
+          },
+          {
+            title: "Stream",
+            camera: true,
+            fields: [
+              { key: "Decoder.0.StreamType", label: "Stream to record", type: "select",
+                options: [["MAIN", "Main"], ["2END", "Sub"]] },
+              { key: "Decoder.0.DevType", label: "Device", type: "select",
+                options: [["IPC", "Camera"], ["DVR", "DVR"], ["NVR", "NVR"], ["HVR", "HVR"]] },
+              { key: "Decoder.0.Channel", label: "Channel on the device", type: "number", min: 0, max: 63,
+                hint: "0 for a camera; for a recorder used as a source, which of its channels" },
+              { key: "Decoder.0.MainRtspUrl", label: "Main stream address", type: "text",
+                hint: "Only for RTSP" },
+              { key: "Decoder.0.SubRtspUrl", label: "Sub stream address", type: "text",
+                hint: "Only for RTSP" },
+            ],
+          },
+        ],
+      },
       {
         id: "overlays",
         title: "Name and time on the picture",
@@ -1018,7 +1077,6 @@ class XmeyePanel extends HTMLElement {
     this._settingsRejected = {};
     //: The record schedule being painted, and the kind of recording painted.
     this._sched = null;
-    this._schedBrush = 7;
     //: Cameras a per-camera page is also written to on Save, and whether the
     //: list of them is open.
     this._settingsCopyTo = new Set();
@@ -3829,14 +3887,18 @@ class XmeyePanel extends HTMLElement {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
     } else {
       const value = this._settingsValue(page);
+      const hasCamera = page.id !== "cameras" || this._cameraPresent(value);
       const cards = page.cards
+        .filter((card) => !card.camera || hasCamera)
         .map(
           (card) => `
             <section class="cfg-card">
               ${card.title ? `<h3>${t(card.title)}</h3>` : ""}
               ${
-                card.schedule
-                  ? this._scheduleBody(value)
+                card.cameras
+                  ? this._camerasList(value)
+                  : card.schedule
+                  ? this._scheduleBody(page, card, value)
                   : card.fields.map((field) => this._settingRow(page, field, value)).join("")
               }
             </section>`
@@ -3844,8 +3906,8 @@ class XmeyePanel extends HTMLElement {
         .join("");
       body = `
         ${page.warning ? `<p class="warn">${t(page.warning)}</p>` : ""}
-        ${page.perChannel ? this._settingsChannelPicker() : ""}
-        <div class="cfg-cards">${cards}</div>
+        ${page.perChannel && !page.status ? this._settingsChannelPicker() : ""}
+        <div class="cfg-cards">${cards}${hasCamera ? this._cameraActions(page) : this._cameraEmpty(page)}</div>
         ${this._settingsBar()}`;
     }
 
@@ -3931,11 +3993,18 @@ class XmeyePanel extends HTMLElement {
     const parts = path.split(".");
     const last = parts.pop();
     let node = target;
-    for (const part of parts) {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
       // Copy on the way down: the section read from the recorder is the record
-      // of what is actually stored and must not be mutated by editing.
+      // of what is actually stored and must not be mutated by editing. A step
+      // that does not exist yet becomes an array when the next step is an index
+      // — a camera added to an empty channel has "Decoder": null, and its
+      // "Decoder.0.IPAddress" must make [{…}], not {"0": {…}}.
       const child = node[part];
-      node[part] = Array.isArray(child) ? [...child] : { ...(child || {}) };
+      const nextIsIndex = /^\d+$/.test(parts[i + 1] ?? last);
+      if (Array.isArray(child)) node[part] = [...child];
+      else if (child == null && nextIsIndex) node[part] = [];
+      else node[part] = { ...(child || {}) };
       node = node[part];
     }
     node[last] = value;
@@ -3996,6 +4065,13 @@ class XmeyePanel extends HTMLElement {
           <input type="range" ${common} min="${field.min}" max="${field.max}" step="1" value="${v}">
           <output for="${id}">${this._settingRangeText(field, v)}</output>
         </span>`;
+    }
+    if (field.type === "password") {
+      // Never shown: the panel only ever holds the mask. Left empty, the stored
+      // password is kept; whatever is typed replaces it.
+      const typed = field.key in this._settingsEdits ? this._settingsEdits[field.key] : "";
+      return `<input type="password" autocomplete="new-password" ${common}
+                     placeholder="${escapeHtml(t("Unchanged"))}" value="${escapeHtml(String(typed))}">`;
     }
     return `<input type="text" ${common} value="${escapeHtml(String(current ?? ""))}">`;
   }
@@ -4083,26 +4159,27 @@ class XmeyePanel extends HTMLElement {
   }
 
   /**
-   * The week of one camera, as half-hour slots the viewer paints.
+   * A week as half-hour slots the viewer paints: the record schedule, or the
+   * hours a detector is on.
    *
    * The slots live in memory while the page is open, so a stroke repaints
    * cells rather than the page; they turn back into the firmware's periods
    * when a stroke ends. Only the days painted are rebuilt — a day set to the
    * minute in the recorder's own menu is written back exactly as it was read.
    */
-  _scheduleBody(value) {
+  _scheduleBody(page, card, value) {
     if (!Schedule) return `<div class="empty">${t("Reading the settings…")}</div>`;
-    const state = this._scheduleState(value);
-    const mode = this._settingCurrent({ key: "RecordMode" }, value);
-    const off = mode !== "ConfigRecord";
+    const state = this._scheduleState(page, card, value);
+    const off = this._scheduleOff(page, card, value);
     const locale = (this._hass && this._hass.locale && this._hass.locale.language) || undefined;
     // Monday first, as a week is read here; the firmware counts from Sunday.
     const order = [1, 2, 3, 4, 5, 6, 0];
     const dayName = (day) =>
       new Date(2026, 0, 4 + day).toLocaleDateString(locale, { weekday: "short" });
-    const brushes = RECORD_BRUSHES.map(
+    const kindOf = (mask) => (card.masks ? Schedule.maskKind(mask) : mask ? "active" : "none");
+    const brushes = (card.masks ? RECORD_BRUSHES : DETECT_BRUSHES).map(
       (b) => `
-        <button class="sched-brush ${b.mask === this._schedBrush ? "active" : ""}" data-brush="${b.mask}"
+        <button class="sched-brush ${b.mask === state.brush ? "active" : ""}" data-brush="${b.mask}"
                 ${off ? "disabled" : ""}>
           <i class="k-${b.kind}"></i>${t(b.label)}
         </button>`
@@ -4112,13 +4189,11 @@ class XmeyePanel extends HTMLElement {
       .join("");
     const rows = order
       .map((day) => {
-        const slots = state.slots[day];
-        const cells = slots
-          .map((mask, slot) => `<i class="k-${Schedule.maskKind(mask)}" data-slot="${slot}"></i>`)
+        const cells = state.slots[day]
+          .map((mask, slot) => `<i class="k-${kindOf(mask)}" data-slot="${slot}"></i>`)
           .join("");
-        const tooMany = state.invalid.has(day);
         return `
-          <div class="sched-row ${tooMany ? "too-many" : ""}" data-day="${day}">
+          <div class="sched-row ${state.invalid.has(day) ? "too-many" : ""}" data-day="${day}">
             <span class="sched-day">${escapeHtml(dayName(day))}</span>
             <div class="sched-cells">${cells}</div>
             <button class="ghost icon sched-copy" data-copyday="${day}" ${off ? "disabled" : ""}
@@ -4128,7 +4203,11 @@ class XmeyePanel extends HTMLElement {
       })
       .join("");
     const notes = [
-      off ? t("The schedule is used only when Record is set to the schedule.") : "",
+      off
+        ? card.masks
+          ? t("The schedule is used only when Record is set to the schedule.")
+          : t("The detector is off; its hours apply once it is switched on.")
+        : "",
       state.invalid.size ? t("A day can hold at most six periods; simplify the marked days.") : "",
       state.rounded ? t("Some periods do not start on a half hour; they are shown rounded and kept exactly as they are unless their day is painted.") : "",
     ].filter(Boolean);
@@ -4147,26 +4226,40 @@ class XmeyePanel extends HTMLElement {
       </div>`;
   }
 
+  /** Whether a schedule card is greyed out: recording not on the schedule, or the detector off. */
+  _scheduleOff(page, card, value) {
+    if (card.masks) return this._settingCurrent({ key: "RecordMode" }, value) !== "ConfigRecord";
+    return this._settingDisabled(page, { when: "Enable" }, value);
+  }
+
   /** The slots being painted, built from what the recorder holds on first use. */
-  _scheduleState(value) {
+  _scheduleState(page, card, value) {
     const channel = this._settingsChannel;
-    if (this._sched && this._sched.channel === channel && this._sched.section === "Record") {
+    if (this._sched && this._sched.channel === channel && this._sched.page === page.id) {
       return this._sched;
     }
-    const periods = this._settingCurrent({ key: "TimeSection" }, value) || [];
-    const masks = this._settingCurrent({ key: "Mask" }, value) || [];
+    const periods = this._settingCurrent({ key: card.periods }, value) || [];
+    const masks = card.masks ? this._settingCurrent({ key: card.masks }, value) || [] : null;
     const slots = [];
     let rounded = false;
     for (let day = 0; day < Schedule.DAYS; day++) {
       const p = periods[day] || [];
-      const m = masks[day] || [];
+      // A detector's periods carry no mask: on is on.
+      const m = masks ? masks[day] || [] : p.map(() => 1);
       slots.push(Schedule.dayToSlots(p, m));
       if (!Schedule.dayIsAligned(p, m)) rounded = true;
     }
+    // A detector writes its unused periods as "0 00:00:00-24:00:00" where the
+    // record schedule writes "0 00:00:00-00:00:00"; a rebuilt day keeps the
+    // spelling its section already uses, so an unchanged period stays unchanged.
+    const unused = periods.flat().find((text) => /^0 /.test(String(text)));
     this._sched = {
       channel,
-      section: "Record",
+      page: page.id,
+      card,
       slots,
+      unused,
+      brush: card.masks ? 7 : 1,
       painted: new Set(),
       invalid: new Set(),
       rounded,
@@ -4183,26 +4276,30 @@ class XmeyePanel extends HTMLElement {
   _scheduleCommit() {
     const state = this._sched;
     if (!state) return;
+    const { card } = state;
     const value = this._settingsValue(this._settingsPage());
-    const stored = { periods: this._settingRead(value, "TimeSection") || [],
-                     masks: this._settingRead(value, "Mask") || [] };
-    const periods = (this._settingCurrent({ key: "TimeSection" }, value) || stored.periods).map((d) => [...d]);
-    const masks = (this._settingCurrent({ key: "Mask" }, value) || stored.masks).map((d) => [...d]);
+    const copy = (days) => (days || []).map((d) => [...d]);
+    const storedPeriods = this._settingRead(value, card.periods) || [];
+    const storedMasks = card.masks ? this._settingRead(value, card.masks) || [] : null;
+    const periods = copy(this._settingCurrent({ key: card.periods }, value) || storedPeriods);
+    const masks = card.masks ? copy(this._settingCurrent({ key: card.masks }, value) || storedMasks) : null;
     state.invalid.clear();
     for (const day of state.painted) {
-      const encoded = Schedule.slotsToDay(state.slots[day]);
+      const encoded = Schedule.slotsToDay(state.slots[day], state.unused);
       if (!encoded) {
         state.invalid.add(day);
         continue;
       }
       periods[day] = encoded.periods;
-      masks[day] = encoded.masks;
+      if (masks) masks[day] = encoded.masks;
     }
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (same(periods, stored.periods)) delete this._settingsEdits.TimeSection;
-    else this._settingsEdits.TimeSection = periods;
-    if (same(masks, stored.masks)) delete this._settingsEdits.Mask;
-    else this._settingsEdits.Mask = masks;
+    if (same(periods, storedPeriods)) delete this._settingsEdits[card.periods];
+    else this._settingsEdits[card.periods] = periods;
+    if (masks) {
+      if (same(masks, storedMasks)) delete this._settingsEdits[card.masks];
+      else this._settingsEdits[card.masks] = masks;
+    }
     this.shadowRoot.querySelectorAll(".sched-row").forEach((row) =>
       row.classList.toggle("too-many", state.invalid.has(Number(row.dataset.day)))
     );
@@ -4218,7 +4315,7 @@ class XmeyePanel extends HTMLElement {
 
     root.querySelectorAll("[data-brush]").forEach((button) =>
       button.addEventListener("click", () => {
-        this._schedBrush = Number(button.dataset.brush);
+        state.brush = Number(button.dataset.brush);
         root.querySelectorAll("[data-brush]").forEach((b) =>
           b.classList.toggle("active", b === button)
         );
@@ -4231,11 +4328,12 @@ class XmeyePanel extends HTMLElement {
     let painting = false;
     let last = null;
     const paintSlot = (row, day, slot) => {
-      if (state.slots[day][slot] === this._schedBrush) return;
-      state.slots[day][slot] = this._schedBrush;
+      if (state.slots[day][slot] === state.brush) return;
+      state.slots[day][slot] = state.brush;
       state.painted.add(day);
       const cell = row.querySelector(`[data-slot="${slot}"]`);
-      if (cell) cell.className = `k-${Schedule.maskKind(this._schedBrush)}`;
+      const kind = state.card.masks ? Schedule.maskKind(state.brush) : state.brush ? "active" : "none";
+      if (cell) cell.className = `k-${kind}`;
     };
     const paintAt = (x, y) => {
       const cell = root.elementFromPoint(x, y);
@@ -4288,7 +4386,7 @@ class XmeyePanel extends HTMLElement {
     const fill = root.getElementById("schedfill");
     if (fill)
       fill.addEventListener("click", () =>
-        repaintAll(() => new Array(Schedule.SLOTS).fill(this._schedBrush))
+        repaintAll(() => new Array(Schedule.SLOTS).fill(state.brush))
       );
     const clear = root.getElementById("schedclear");
     if (clear)
@@ -4372,6 +4470,142 @@ class XmeyePanel extends HTMLElement {
     return count ? t("Copy to {count} cameras", { count }) : t("Copy to other cameras…");
   }
 
+  /** Whether the open channel has a camera configured, edits included. */
+  _cameraPresent(value) {
+    const decoder = this._settingCurrent({ key: "Decoder" }, value);
+    return Array.isArray(decoder) && decoder.length > 0;
+  }
+
+  /**
+   * Every channel of the recorder, with its camera and how it is doing.
+   *
+   * The state comes from NetWork.ChnStatus, read beside the section: the
+   * configuration says where a camera should be, only the status says whether
+   * the recorder actually reached it. Empty channels fold into one line — a
+   * recorder has thirty-two, and a list of thirty "empty" rows hides the two
+   * cameras that matter.
+   */
+  _camerasList(value) {
+    const entries = Array.isArray(this._settings.value) ? this._settings.value : [];
+    const status = this._settings.status || [];
+    const stateLabel = {
+      Connected: t("Connected"),
+      Offline: t("Offline"),
+      NoConfig: t("Empty"),
+    };
+    const rows = [];
+    let empty = 0;
+    entries.forEach((entry, index) => {
+      const decoder = Array.isArray(entry.Decoder) ? entry.Decoder[0] : null;
+      const st = status[index] || {};
+      const selected = index === this._settingsChannel;
+      if (!decoder && !selected) {
+        empty += 1;
+        return;
+      }
+      const state = st.Status || (decoder ? "Offline" : "NoConfig");
+      rows.push(`
+        <button class="cam-row ${selected ? "active" : ""}" data-camrow="${index}">
+          <span class="cam-no">${index + 1}</span>
+          <span class="cam-name">${escapeHtml((decoder && decoder.ConfName) || st.ChnName || "")}</span>
+          <span class="cam-addr">${decoder ? escapeHtml(`${decoder.IPAddress}:${decoder.Port}`) : "—"}</span>
+          <span class="cam-proto">${decoder ? escapeHtml(decoder.Protocol === "TCP" ? "NETIP" : decoder.Protocol) : ""}</span>
+          <span class="cam-state st-${state.toLowerCase()}">${escapeHtml(stateLabel[state] || state)}${
+            state === "Connected" && st.CurRes ? ` · ${escapeHtml(st.CurRes)}` : ""
+          }</span>
+        </button>`);
+    });
+    const firstEmpty = entries.findIndex(
+      (entry, index) => !(Array.isArray(entry.Decoder) && entry.Decoder.length) && index !== this._settingsChannel
+    );
+    return `
+      <div class="cam-list">
+        ${rows.join("")}
+        ${
+          empty
+            ? `<div class="cam-empty">
+                 <span>${t("{count} empty channels", { count: empty })}</span>
+                 ${firstEmpty >= 0 ? `<button class="ghost" data-camrow="${firstEmpty}">${t("Add a camera")}</button>` : ""}
+               </div>`
+            : ""
+        }
+      </div>`;
+  }
+
+  /** Under a channel that has a camera: taking it off. */
+  _cameraActions(page) {
+    if (page.id !== "cameras") return "";
+    return `
+      <div class="cam-actions">
+        <button class="ghost danger" id="camremove">${t("Remove the camera from this channel")}</button>
+      </div>`;
+  }
+
+  /** A channel with no camera: one button to start one. */
+  _cameraEmpty(page) {
+    if (page.id !== "cameras") return "";
+    return `
+      <section class="cfg-card cam-none">
+        <p>${t("No camera on channel {number}.", { number: this._settingsChannel + 1 })}</p>
+        <button class="primary" id="camadd">${t("Add a camera here")}</button>
+      </section>`;
+  }
+
+  /** Open another channel's entry, asking first if edits would be lost. */
+  _settingsSelectChannel(index) {
+    if (index === this._settingsChannel) return;
+    if (!this._settingsMayLeave()) {
+      this._render();
+      return;
+    }
+    this._settingsChannel = index;
+    this._settingsEdits = {};
+    this._settingsRejected = {};
+    this._settingsNote = null;
+    this._sched = null;
+    this._settingsCopyTo.clear();
+    this._render();
+  }
+
+  /** The list rows, and adding or removing the open channel's camera. */
+  _bindCameras() {
+    const root = this.shadowRoot;
+    root.querySelectorAll("[data-camrow]").forEach((row) =>
+      row.addEventListener("click", () => this._settingsSelectChannel(Number(row.dataset.camrow)))
+    );
+    const add = root.getElementById("camadd");
+    if (add)
+      add.addEventListener("click", () => {
+        // The shape the recorder writes for a camera it found itself, with the
+        // ONVIF defaults most cameras answer to. Verified by adding the
+        // simulator to channel 3 with exactly this.
+        this._settingsEdits = {
+          Enable: true,
+          SingleConnId: "0x00000001",
+          Decoder: [{
+            Channel: 0, ConfName: `D${String(this._settingsChannel + 1).padStart(2, "0")}`,
+            DevType: "IPC", Enable: true, IPAddress: "", Interval: 10, MacAddr: "",
+            MainRtspUrl: "", PassWord: "", Port: 80, Protocol: "ONVIF", SerialNo: "",
+            StreamType: "MAIN", SubRtspUrl: "", TransModel: 0, UserName: "admin",
+          }],
+        };
+        this._render();
+      });
+    const remove = root.getElementById("camremove");
+    if (remove)
+      remove.addEventListener("click", () => {
+        if (!window.confirm(t("Remove the camera from channel {number}? Its recordings stay on the disk.",
+                              { number: this._settingsChannel + 1 }))) return;
+        // An empty channel, as the recorder writes one.
+        for (const key of Object.keys(this._settingsEdits)) {
+          if (key.startsWith("Decoder")) delete this._settingsEdits[key];
+        }
+        this._settingsEdits.Decoder = null;
+        this._settingsEdits.SingleConnId = "0x00000000";
+        this._render();
+      });
+  }
+
   /** Channel selector for the sections that hold one entry per channel. */
   _settingsChannelPicker() {
     const channels = (this._detail && this._detail.channels) || [];
@@ -4387,8 +4621,8 @@ class XmeyePanel extends HTMLElement {
       <div class="cfg-channel">
         <label for="setchannel">${t("Camera")}</label>
         <select id="setchannel">${options}</select>
-        <button class="ghost ${this._settingsCopyTo.size ? "active" : ""}" id="copytoggle"
-                aria-expanded="${this._settingsCopyOpen ? "true" : "false"}">${this._copyToggleLabel()}</button>
+        ${this._settingsPage().noCopy ? "" : `<button class="ghost ${this._settingsCopyTo.size ? "active" : ""}" id="copytoggle"
+                aria-expanded="${this._settingsCopyOpen ? "true" : "false"}">${this._copyToggleLabel()}</button>`}
       </div>
       ${this._settingsCopyPanel()}`;
   }
@@ -4416,15 +4650,39 @@ class XmeyePanel extends HTMLElement {
         section: page.section,
       });
       this._settings = { section: page.section, value: reply.value };
+      if (page.status) this._settings.status = await this._settingsStatus(page);
     } catch (err) {
       this._settings = { section: page.section, error: err.message || String(err) };
     }
     this._render();
   }
 
+  /** The live state a page shows beside its configuration; empty if unreadable. */
+  async _settingsStatus(page) {
+    try {
+      const reply = await this._ws({ type: "xmeye/config", entry_id: this._entryId, section: page.status });
+      return Array.isArray(reply.value) ? reply.value : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
   async _saveSettings() {
     const page = this._settingsPage();
     if (!this._settings || !this._settings.value) return;
+    // Fields that must look like something — a camera's address — are checked
+    // here rather than discovered as a camera that never connects.
+    const value = this._settingsValue(page);
+    const bad = this._settingFields().find(
+      (f) => f.pattern && this._settingCurrent(f, value) != null &&
+        !new RegExp(f.pattern).test(String(this._settingCurrent(f, value)))
+    );
+    if (bad) {
+      this._settingsNote = t("Check “{field}”: it does not look right", { field: t(bad.label) });
+      this._settingsRejected = { [bad.key]: true };
+      this._render();
+      return;
+    }
     this._settingsSaving = true;
     this._refreshSettingsToolbar();
 
@@ -4461,12 +4719,26 @@ class XmeyePanel extends HTMLElement {
       }
     }
     try {
-      const reply = await this._ws({
-        type: "xmeye/config_set",
-        entry_id: this._entryId,
-        section: page.section,
-        value: merged,
-      });
+      let reply;
+      if (page.writeEntry) {
+        // Only the open channel's entry goes out, addressed as the firmware
+        // addresses one element; the section is then read whole again.
+        const written = await this._ws({
+          type: "xmeye/config_set",
+          entry_id: this._entryId,
+          section: `${page.section}.[${this._settingsChannel}]`,
+          value: merged[this._settingsChannel],
+        });
+        const fresh = await this._ws({ type: "xmeye/config", entry_id: this._entryId, section: page.section });
+        reply = { value: fresh.value, restart: written.restart };
+      } else {
+        reply = await this._ws({
+          type: "xmeye/config_set",
+          entry_id: this._entryId,
+          section: page.section,
+          value: merged,
+        });
+      }
       const copied = this._settingsCopyTo.size;
       this._settingsEdits = {};
       this._settingsRejected = {};
@@ -4484,7 +4756,11 @@ class XmeyePanel extends HTMLElement {
         // against what came back, and one that did not stick says so on its row.
         this._settings = { section: page.section, value: reply.value };
         const stored = this._settingsValue(page);
+        const secret = new Set(this._settingFields().filter((f) => f.type === "password").map((f) => f.key));
         for (const [path, value] of Object.entries(edits)) {
+          // A password reads back masked, so it cannot be compared; and a whole
+          // object or array replaced at once is checked through its fields.
+          if (secret.has(path) || (value !== null && typeof value === "object")) continue;
           if (String(this._settingRead(stored, path)) !== String(value)) {
             this._settingsRejected[path] = true;
           }
@@ -4500,6 +4776,16 @@ class XmeyePanel extends HTMLElement {
       this._settingsNote = t("Could not save: {error}", { error: err.message || err });
     }
     this._settingsSaving = false;
+    if (page.status && this._settings && this._settings.value) {
+      // The recorder reaches a camera a few seconds after it is written; the
+      // state is read again then, so the list says whether it worked.
+      this._settings.status = await this._settingsStatus(page);
+      setTimeout(async () => {
+        if (this._settingsPage().id !== page.id || !this._settings || this._settings.loading) return;
+        this._settings.status = await this._settingsStatus(page);
+        if (!Object.keys(this._settingsEdits).length) this._render();
+      }, 6000);
+    }
     this._render();
   }
 
@@ -5058,6 +5344,12 @@ class XmeyePanel extends HTMLElement {
           const n = Math.round(Number(input.value) || 0);
           value = Math.min(field.max ?? Infinity, Math.max(field.min ?? -Infinity, n));
           input.value = value;
+        } else if (field.type === "password") {
+          // Empty is "keep the stored one", not "set an empty password".
+          if (input.value === "") delete this._settingsEdits[field.key];
+          else this._settingsEdits[field.key] = input.value;
+          this._refreshSettingsToolbar();
+          return;
         } else if (input.type === "range" || field.numeric) {
           // The device stores these as numbers; a control hands back a string,
           // and the firmware ignores a field of the wrong type.
@@ -5087,22 +5379,13 @@ class XmeyePanel extends HTMLElement {
       setChannel.addEventListener("change", () => {
         // Edits belong to the channel they were made on; carrying them over
         // would silently write one camera's values onto another.
-        if (!this._settingsMayLeave()) {
-          setChannel.value = String(this._settingsChannel);
-          return;
-        }
-        this._settingsChannel = Number(setChannel.value);
-        this._settingsEdits = {};
-        this._settingsRejected = {};
-        this._settingsNote = null;
-        this._sched = null;
-        this._settingsCopyTo.clear();
-        this._render();
+        this._settingsSelectChannel(Number(setChannel.value));
       });
 
     this._bindSettingsBar();
     this._bindSchedule();
     this._bindCopyPanel();
+    this._bindCameras();
 
     const toggleLog = root.getElementById("togglelog");
     if (toggleLog)
@@ -5470,6 +5753,38 @@ const STYLES = `
     gap:4px 12px; max-height:220px; overflow:auto; }
   .cfg-copy-item { display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; }
 
+  /* IP cameras: the channels as a list of rows, each a button that opens its
+     camera below. */
+  .cam-list { display:flex; flex-direction:column; }
+  .cam-row { display:grid; grid-template-columns: 30px minmax(0,1.2fr) minmax(0,1.3fr) 70px minmax(0,1.3fr);
+    align-items:center; gap:10px; padding:10px 16px; border:0; border-top:1px solid var(--divider-color);
+    background:none; color: var(--primary-text-color); font:inherit; font-size:14px; text-align:left;
+    cursor:pointer; }
+  .cfg-card h3 + .cam-list .cam-row:first-child { border-top:0; }
+  .cam-row:hover { background: var(--secondary-background-color); }
+  .cam-row.active { background: color-mix(in srgb, var(--primary-color) 12%, transparent); }
+  .cam-no { color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+  .cam-name, .cam-addr, .cam-state { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cam-addr, .cam-proto { font-size:13px; color: var(--secondary-text-color);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .cam-state { font-size:13px; }
+  .cam-state::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%;
+    margin-right:6px; background: var(--disabled-color, #9e9e9e); vertical-align:1px; }
+  .cam-state.st-connected::before { background: var(--success-color, #43a047); }
+  .cam-state.st-offline::before { background: var(--error-color, #f44336); }
+  .cam-empty { display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:10px 16px; border-top:1px solid var(--divider-color); font-size:13px;
+    color: var(--secondary-text-color); }
+  .cam-none { padding:20px 16px; display:flex; align-items:center; justify-content:space-between;
+    gap:12px; flex-wrap:wrap; }
+  .cam-none p { margin:0; color: var(--secondary-text-color); }
+  .cam-actions { display:flex; justify-content:flex-end; }
+  button.ghost.danger { color: var(--error-color, #f44336); border-color: currentColor; }
+  @media (max-width: 600px) {
+    .cam-row { grid-template-columns: 26px minmax(0,1fr) auto; }
+    .cam-addr, .cam-proto { display:none; }
+  }
+
   /* The record schedule: one row a day, 48 half hours across, coloured by what
      is recorded. The colours are the archive timeline's, so a week here reads
      the same as a day there. */
@@ -5505,6 +5820,7 @@ const STYLES = `
   .sched-copy { padding:4px; display:flex; align-items:center; justify-content:center; }
   .k-none { background:transparent; }
   .k-always { background: var(--info-color, #2196f3); }
+  .k-active { background: var(--success-color, #43a047); }
   .k-motion { background: var(--warning-color, #ff9800); }
   .k-alarm { background: var(--error-color, #f44336); }
   .k-event { background: repeating-linear-gradient(135deg, var(--warning-color, #ff9800) 0 4px,

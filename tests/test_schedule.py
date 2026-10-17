@@ -121,3 +121,14 @@ def test_masks_and_kinds() -> None:
         "parse": [6, 7, 4],
         "kind": ["none", "always", "motion", "alarm", "event", "always"],
     }
+
+
+def test_a_detector_day_keeps_its_own_unused_spelling() -> None:
+    """A detector's off periods read "0 00:00:00-24:00:00"; a rebuilt day keeps that."""
+    unused = "0 00:00:00-24:00:00"
+    periods = ["1 00:00:00-24:00:00", *[unused] * 5]
+    got = run(
+        f"const s = m.dayToSlots({json.dumps(periods)}, [1, 1, 1, 1, 1, 1]);"
+        f"console.log(JSON.stringify(m.slotsToDay(s, {json.dumps(unused)}).periods));"
+    )
+    assert got == periods

@@ -101,8 +101,12 @@ export function dayIsAligned(periods, masks) {
  * Each run of slots with one mask becomes a period. Answers null when the day
  * needs more than six — the firmware has nowhere to put a seventh, and
  * dropping one silently would leave a camera unrecorded for part of a day.
+ *
+ * `unused` is how the section spells a period that is off: the record schedule
+ * writes "0 00:00:00-00:00:00", a detector "0 00:00:00-24:00:00", and keeping
+ * the section's own spelling leaves an unchanged period unchanged.
  */
-export function slotsToDay(slots) {
+export function slotsToDay(slots, unused = EMPTY_PERIOD) {
   const runs = [];
   let start = 0;
   for (let slot = 1; slot <= SLOTS; slot++) {
@@ -120,7 +124,7 @@ export function slotsToDay(slots) {
       periods.push(`1 ${formatClock(run.start * SLOT_SECONDS)}-${formatClock(run.end * SLOT_SECONDS)}`);
       masks.push(formatMask(run.mask));
     } else {
-      periods.push(EMPTY_PERIOD);
+      periods.push(unused || EMPTY_PERIOD);
       masks.push(EMPTY_MASK);
     }
   }

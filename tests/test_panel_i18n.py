@@ -37,11 +37,14 @@ JOINED = re.compile(r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*', re.S)
 INDIRECT = (
     "WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS",
     "SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS", "RECORD_BRUSHES",
+    "DETECT_BRUSHES",
 )
 
 #: The settings schema and the field lists it shares between pages: tables of
 #: fields and options, read by ``schema_strings``.
-SCHEMA = ("SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS", "RECORD_BRUSHES")
+SCHEMA = (
+    "SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS", "RECORD_BRUSHES", "DETECT_BRUSHES",
+)
 
 #: Tables of ``[value, label]`` pairs, where only the label is ever shown.
 PAIRED = ("WALL_STREAMS", "PLAYERS")
