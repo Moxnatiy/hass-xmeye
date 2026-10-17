@@ -397,6 +397,13 @@ const SETTINGS_TREE = [
     title: "System",
     pages: [
       {
+        id: "device",
+        title: "About the recorder",
+        info: "device",
+        hint: "What the recorder is, and restarting it.",
+        cards: [],
+      },
+      {
         id: "general",
         title: "General",
         section: "General.General",
@@ -696,6 +703,13 @@ const SETTINGS_TREE = [
     title: "Storage",
     pages: [
       {
+        id: "disks",
+        title: "Disks",
+        info: "disks",
+        hint: "The disks in the recorder: how full they are, and how far back the recordings go.",
+        cards: [],
+      },
+      {
         id: "disk-full",
         title: "When the disk is full",
         section: "General.General",
@@ -823,6 +837,97 @@ const SETTINGS_TREE = [
           },
         ],
       },
+      {
+        id: "email",
+        title: "Email",
+        section: "NetWork.NetEmail",
+        hint: "The mail server the recorder sends alarm emails through. Which events send one is set on their own pages.",
+        cards: [
+          {
+            title: "Mail server",
+            fields: [
+              { key: "Enable", label: "Send emails", type: "toggle" },
+              { key: "MailServer.Name", label: "SMTP server", type: "text", when: "Enable",
+                hint: "smtp.gmail.com, for example" },
+              // The firmware keeps the port twice, in the server and beside it;
+              // both are written so neither disagrees with the other.
+              { key: "MailServer.Port", label: "Port", type: "number", min: 1, max: 65535,
+                alsoWrite: ["Port"], when: "Enable", hint: "Usually 465 with SSL, 25 or 587 without" },
+              { key: "UseSSL", label: "Encrypted connection (SSL)", type: "toggle", when: "Enable" },
+              { key: "MailServer.Anonymity", label: "Server needs no login", type: "toggle", when: "Enable" },
+              { key: "MailServer.UserName", label: "User name", type: "text", when: "Enable" },
+              { key: "MailServer.Password", label: "Password", type: "password", when: "Enable" },
+            ],
+          },
+          {
+            title: "Message",
+            fields: [
+              { key: "SendAddr", label: "From", type: "text", when: "Enable" },
+              { key: "Recievers.0", label: "To", type: "text", when: "Enable" },
+              { key: "Recievers.1", label: "Also to", type: "text", when: "Enable" },
+              { key: "Recievers.2", label: "Also to", type: "text", when: "Enable" },
+              { key: "Title", label: "Subject", type: "text", when: "Enable" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "ftp",
+        title: "FTP",
+        section: "NetWork.NetFTP",
+        hint: "Where snapshots and clips go when an event says to upload them to FTP.",
+        cards: [
+          {
+            title: "FTP server",
+            fields: [
+              { key: "Enable", label: "Upload to FTP", type: "toggle" },
+              { key: "Server.Name", label: "Server", type: "text", when: "Enable" },
+              { key: "Server.Port", label: "Port", type: "number", min: 1, max: 65535, when: "Enable" },
+              { key: "Server.Anonymity", label: "Anonymous login", type: "toggle", when: "Enable" },
+              { key: "Server.UserName", label: "User name", type: "text", when: "Enable" },
+              { key: "Server.Password", label: "Password", type: "password", when: "Enable" },
+              { key: "Directory", label: "Folder", type: "text", when: "Enable" },
+              { key: "MaxFileLen", label: "Largest file", type: "number", min: 1, max: 4096,
+                unit: "MB", when: "Enable" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "upnp",
+        title: "UPnP",
+        section: "NetWork.Upnp",
+        hint: "Asking the router to open the recorder's ports by itself. Leave it off unless the recorder must be reached from outside without a VPN.",
+        cards: [
+          {
+            title: "UPnP",
+            fields: [
+              { key: "Enable", label: "Open the ports on the router", type: "toggle" },
+              { key: "HTTPPort", label: "Web port", type: "number", min: 1, max: 65535, when: "Enable" },
+              { key: "MediaPort", label: "Media port", type: "number", min: 1, max: 65535, when: "Enable" },
+              { key: "MobilePort", label: "Mobile app port", type: "number", min: 1, max: 65535, when: "Enable" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "rtsp",
+        title: "RTSP",
+        section: "NetWork.RTSP",
+        hint: "The RTSP server the camera entities in Home Assistant read from.",
+        warning:
+          "The camera entities read RTSP from this port. Changing it or switching the " +
+          "server off stops them until the integration's options say the same.",
+        cards: [
+          {
+            title: "RTSP server",
+            fields: [
+              { key: "IsServer", label: "RTSP server", type: "toggle" },
+              { key: "Server.Port", label: "Port", type: "number", min: 1, max: 65535, when: "IsServer" },
+            ],
+          },
+        ],
+      },
     ],
   },
 ];
@@ -934,6 +1039,8 @@ const fmtQuality = (stats) =>
 const fmtTime = (iso) => (iso ? iso.replace("T", " ").slice(0, 19) : "—");
 const fmtDay = (iso) => (iso ? iso.slice(0, 10) : "—");
 const fmtClockFull = (iso) => (iso ? iso.replace("T", " ").slice(11, 19) : "—");
+//: A recorder's local moment as date and time, to the minute.
+const fmtDateTime = (iso) => (iso ? iso.replace("T", " ").slice(0, 16) : "—");
 
 //: The recorder lives in local time without zones, so the request matches.
 const toLocalIso = (date) => {
@@ -3881,7 +3988,9 @@ class XmeyePanel extends HTMLElement {
     // Still reading counts as not read: drawn from an empty value, the form
     // showed defaults for a moment, and the schedule kept the empty week it
     // was first built from.
-    if (!this._settings || this._settings.section !== page.section || this._settings.loading) {
+    if (page.info) {
+      body = page.info === "disks" ? this._disksInfo() : this._deviceInfo();
+    } else if (!this._settings || this._settings.section !== page.section || this._settings.loading) {
       body = `<div class="empty">${t("Reading the settings…")}</div>`;
     } else if (this._settings.error) {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
@@ -4082,6 +4191,73 @@ class XmeyePanel extends HTMLElement {
       return `${Math.round(((value - field.min) / (field.max - field.min)) * 100)}%`;
     }
     return String(value);
+  }
+
+  /** Where an edit is written: its own path, and any the field mirrors it to. */
+  _settingTargets(path) {
+    const field = this._settingFields().find((f) => f.key === path);
+    return [path, ...((field && field.alsoWrite) || [])];
+  }
+
+  /** The disks, from what the poll already read: nothing here is editable. */
+  _disksInfo() {
+    const disks = (this._detail && this._detail.storage) || [];
+    if (!disks.length) return `<div class="empty">${t("No disk")}</div>`;
+    return `<div class="cfg-cards">${disks
+      .map((disk, n) =>
+        disk.partitions
+          .map((part, i) => {
+            const used = Math.max(0, Math.min(100, part.used_percent || 0));
+            const title = disk.partitions.length > 1
+              ? t("Disk {number}, partition {part}", { number: n + 1, part: i + 1 })
+              : t("Disk {number}", { number: n + 1 });
+            return `
+              <section class="cfg-card">
+                <h3>${title}</h3>
+                <div class="disk-bar" role="img" aria-label="${used}%"><i style="width:${used}%"></i></div>
+                ${this._infoRow(t("Size"), fmtBytes(part.total_mb * 1048576))}
+                ${this._infoRow(t("Free"), `${part.free_mb ? fmtBytes(part.free_mb * 1048576) : `0 ${t("GB")}`} · ${100 - used}%`)}
+                ${this._infoRow(t("Recordings from"), fmtDateTime(part.oldest))}
+                ${this._infoRow(t("Recordings to"), fmtDateTime(part.newest))}
+              </section>`;
+          })
+          .join("")
+      )
+      .join("")}</div>`;
+  }
+
+  /** What the recorder is, and a restart. */
+  _deviceInfo() {
+    const d = this._detail;
+    if (!d) return `<div class="empty">${t("Reading the settings…")}</div>`;
+    const dev = d.device || {};
+    return `
+      <div class="cfg-cards">
+        <section class="cfg-card">
+          <h3>${t("Recorder")}</h3>
+          ${this._infoRow(t("Model"), escapeHtml(dev.model || "—"))}
+          ${this._infoRow(t("Firmware"), `<span class="mono">${escapeHtml(dev.firmware || "—")}</span>`)}
+          ${this._infoRow(t("Built"), dev.build_time ? fmtDay(dev.build_time) : "—")}
+          ${this._infoRow(t("Channels"), String(dev.channels ?? "—"))}
+          ${this._infoRow(t("Address"), `<span class="mono">${escapeHtml(d.host || "—")}</span>`)}
+          ${this._infoRow(t("Running for"), fmtDuration(dev.uptime_seconds))}
+          ${this._infoRow(t("Recorder's clock"), fmtDateTime(dev.device_time))}
+          ${this._infoRow(t("Two-way audio"), dev.supports_talk ? t("Yes") : t("No"))}
+        </section>
+        <section class="cfg-card">
+          <h3>${t("Restart")}</h3>
+          <div class="cfg-row">
+            <label><span>${t("Restart the recorder")}</span>
+              <small>${t("Recording stops for about a minute while it starts again.")}</small></label>
+            <div class="cfg-control"><button class="ghost danger" id="rebootrecorder">${t("Restart")}</button></div>
+          </div>
+          ${this._settingsNote ? `<p class="hint cfg-note">${escapeHtml(this._settingsNote)}</p>` : ""}
+        </section>
+      </div>`;
+  }
+
+  _infoRow(label, value) {
+    return `<div class="cfg-row"><label><span>${label}</span></label><div class="cfg-control cfg-value">${value}</div></div>`;
   }
 
   /** The save bar's buttons; called again whenever the bar is redrawn. */
@@ -4635,6 +4811,14 @@ class XmeyePanel extends HTMLElement {
 
   async _loadSettings() {
     const page = this._settingsPage();
+    if (page.info) {
+      // Nothing to read: these pages show what the poll already holds.
+      this._settings = { section: null, value: {} };
+      this._settingsEdits = {};
+      this._settingsNote = null;
+      this._render();
+      return;
+    }
     this._settings = { section: page.section, loading: true };
     this._settingsEdits = {};
     this._settingsRejected = {};
@@ -4697,7 +4881,9 @@ class XmeyePanel extends HTMLElement {
         index === this._settingsChannel ? { ...entry } : entry
       );
       for (const [path, value] of Object.entries(edits)) {
-        this._settingWrite(merged[this._settingsChannel], path, value);
+        for (const target of this._settingTargets(path)) {
+          this._settingWrite(merged[this._settingsChannel], target, value);
+        }
       }
       // The cameras ticked for copying get every value of the page as the open
       // camera has it now — not only the edits, or a camera copied to would
@@ -4715,7 +4901,7 @@ class XmeyePanel extends HTMLElement {
     } else {
       merged = { ...this._settings.value };
       for (const [path, value] of Object.entries(edits)) {
-        this._settingWrite(merged, path, value);
+        for (const target of this._settingTargets(path)) this._settingWrite(merged, target, value);
       }
     }
     try {
@@ -5387,6 +5573,20 @@ class XmeyePanel extends HTMLElement {
     this._bindCopyPanel();
     this._bindCameras();
 
+    const reboot = root.getElementById("rebootrecorder");
+    if (reboot)
+      reboot.addEventListener("click", async () => {
+        if (!window.confirm(t("Restart the recorder now? Recording stops for about a minute."))) return;
+        reboot.disabled = true;
+        try {
+          await this._ws({ type: "xmeye/reboot", entry_id: this._entryId });
+          this._settingsNote = t("The recorder is restarting; it will be back in about a minute.");
+        } catch (err) {
+          this._settingsNote = t("Could not restart: {error}", { error: err.message || err });
+        }
+        this._render();
+      });
+
     const toggleLog = root.getElementById("togglelog");
     if (toggleLog)
       toggleLog.addEventListener("click", () => this._setLogToFile(!this._logToFile));
@@ -5739,6 +5939,12 @@ const STYLES = `
     box-shadow:0 -2px 10px rgba(0,0,0,.12); }
   .cfg-bar.dirty { border-color: var(--primary-color); }
   .cfg-status { flex:1; font-size:13px; color: var(--secondary-text-color); }
+  .cfg-value { font-size:14px; color: var(--secondary-text-color); text-align:right; }
+  .cfg-value .mono, .cfg-row .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px; }
+  .cfg-note { margin:0; padding:0 16px 14px; }
+  .disk-bar { margin:4px 16px 10px; height:8px; border-radius:4px; overflow:hidden;
+    background: var(--secondary-background-color); }
+  .disk-bar i { display:block; height:100%; background: var(--primary-color); }
   /* The status is put together from parts, and the first may be one that
      reads mid-sentence elsewhere ("will be copied to …"). */
   .cfg-status::first-letter { text-transform:uppercase; }

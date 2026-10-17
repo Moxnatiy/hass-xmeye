@@ -70,6 +70,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_stream_url)
     websocket_api.async_register_command(hass, ws_ptz)
+    websocket_api.async_register_command(hass, ws_reboot)
 
 
 @websocket_api.websocket_command(
@@ -207,6 +208,31 @@ async def ws_config_set(
         msg["id"],
         {"section": section, "value": mask(stored), "restart": needs_restart(reply)},
     )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/reboot", vol.Required("entry_id"): str}
+)
+@websocket_api.async_response
+async def ws_reboot(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Reboot the recorder, the same command the reboot button entity sends.
+
+    The recorder drops every connection as it goes down, so the reply is sent
+    once the command is acknowledged; the coordinator reconnects by itself
+    when the recorder is back, about a minute later.
+    """
+    coordinator = _require(hass, msg["entry_id"])
+    try:
+        async with coordinator.lock:
+            await coordinator.client.reboot()
+    except XmeyeError as err:
+        connection.send_error(msg["id"], "reboot_failed", str(err))
+        return
+    connection.send_result(msg["id"], {"rebooting": True})
 
 
 @websocket_api.websocket_command(

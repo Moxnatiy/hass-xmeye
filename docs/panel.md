@@ -85,6 +85,15 @@ writing the shape of an empty channel — `Decoder: null`,
 before it is sent. The state is read again a few seconds after a save, when
 the recorder has had time to reach the camera.
 
+The network section also edits the mail server (`NetWork.NetEmail`, whose port
+the firmware keeps twice — both are written), FTP, UPnP and the RTSP server.
+Storage opens on **Disks**, and System on **About the recorder**: read-only
+pages built from what the poll already holds, the latter with a restart that
+sends the same command as the reboot button entity. A mail test and an FTP
+test exist in the SDK (`OPMailTest`, `OPFTPTest`) but are not offered until
+their request format is confirmed on a recorder with mail set up; factory reset
+and disk formatting are left out on purpose.
+
 Passwords never reach the panel: sections are masked on the way out (`***`),
 and a password field shows empty — "unchanged". Since the panel sends a
 section back whole, the integration replaces every mask with what the recorder
