@@ -34,7 +34,14 @@ JOINED = re.compile(r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*', re.S)
 #: once at load, before the language is known, so they hold the English source
 #: and are translated where they are used. Named here because a regex looking
 #: for ``t("…")`` cannot see through the indirection.
-INDIRECT = ("WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS", "SETTINGS_GROUPS")
+INDIRECT = (
+    "WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS",
+    "SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS",
+)
+
+#: The settings schema and the field lists it shares between pages: tables of
+#: fields and options, read by ``schema_strings``.
+SCHEMA = ("SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS")
 
 #: Tables of ``[value, label]`` pairs, where only the label is ever shown.
 PAIRED = ("WALL_STREAMS", "PLAYERS")
@@ -45,9 +52,13 @@ PAIRED = ("WALL_STREAMS", "PLAYERS")
 SAME_EVERYWHERE = re.compile(r"[a-z]")
 
 #: A language is named in its own language wherever it is offered — the recorder
-#: menu list reads English / Русский / 简体中文 whoever is looking at it. Only the
-#: first of those has lowercase Latin letters, so only it needs saying here.
-NEVER_TRANSLATED = {"English"}
+#: menu list reads English / Українська / Polski whoever is looking at it. Only
+#: the ones written in Latin letters need saying here; the rest have no
+#: lowercase Latin letter and are left alone anyway.
+NEVER_TRANSLATED = {"English", "Polski", "Deutsch"} | {
+    # Protocol names, written the way the camera's own manual writes them.
+    "Pelco-D", "Pelco-P",
+}
 
 #: A dictionary entry: a quoted key at the start of a line inside a language.
 ENTRY = re.compile(r'^\s{2}"((?:[^"\\]|\\.)*)":', re.MULTILINE)
@@ -77,7 +88,7 @@ def asked_for() -> set[str]:
     for name in INDIRECT:
         table = re.search(rf"^const {name} = [{{\[](.*?)^[}}\]];", text, re.M | re.S)
         assert table, f"{name} is gone from the panel; this test needs updating"
-        if name == "SETTINGS_GROUPS":
+        if name in SCHEMA:
             found |= schema_strings(table.group(1))
             continue
         if name in PAIRED:
@@ -99,8 +110,12 @@ def schema_strings(block: str) -> set[str]:
     translations of "OverWrite" and "115200".
     """
     found = set()
-    for named in re.finditer(r"(?:title|hint|label|warning):\s*(" + JOINED.pattern + ")", block):
+    named_text = r"(?:title|hint|label|warning|unit):\s*(" + JOINED.pattern + ")"
+    for named in re.finditer(named_text, block):
         found.add("".join(PIECE.findall(named.group(1))))
+    # A level's words for its steps, one per position on the slider.
+    for labels in re.finditer(r"labels:\s*\[([^\]]*)\]", block):
+        found |= set(PIECE.findall(labels.group(1)))
     # Two-element arrays in this schema are always options, written across one
     # line or several, so they are found directly rather than by first locating
     # the ``options:`` they belong to.

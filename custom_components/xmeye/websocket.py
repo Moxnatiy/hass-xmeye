@@ -28,7 +28,7 @@ from .const import (
 from .coordinator import XmeyeCoordinator
 from .ptz import HOLD_REPEAT
 from .report import enabled_capabilities, format_report, redact
-from .xmeyelib import PtzCommand, XmeyeError
+from .xmeyelib import PtzCommand, XmeyeError, needs_restart
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ async def ws_config_set(
     section = msg["section"]
     try:
         async with coordinator.lock:
-            await coordinator.client.set_config(section, msg["value"])
+            reply = await coordinator.client.set_config(section, msg["value"])
             stored = await coordinator.client.get_config(section, check=False)
     except XmeyeError as err:
         connection.send_error(msg["id"], "write_failed", str(err))
@@ -195,7 +195,12 @@ async def ws_config_set(
     # Settings like the channel titles or the recording mode change what the
     # entities report, so the next poll should not wait out the interval.
     await coordinator.async_request_refresh()
-    connection.send_result(msg["id"], {"section": section, "value": stored})
+    # A value taken for after a restart reads back as the old one until then,
+    # so the panel must not call it rejected; it is told which it was.
+    connection.send_result(
+        msg["id"],
+        {"section": section, "value": stored, "restart": needs_restart(reply)},
+    )
 
 
 @websocket_api.websocket_command(

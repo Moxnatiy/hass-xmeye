@@ -182,7 +182,14 @@ class Ret(IntEnum):
     ACCOUNT_LOCKED = 205
     ILLEGAL_TIME = 206
     BLACKLISTED = 207
+    SAVED_NEEDS_REBOOT = 150
+    NEEDS_APP_RESTART = 602
+    NEEDS_REBOOT = 603
+    FILE_ERROR = 604
+    NOT_SUPPORTED = 605
+    INVALID_VALUE = 606
     NO_SUCH_CONFIG = 607
+    CONFIG_PARSE_ERROR = 608
     UPGRADE_STARTED = 511
     UPGRADE_NOT_STARTED = 512
     UPGRADE_DATA_ERROR = 513
@@ -211,6 +218,7 @@ RET_MESSAGES: dict[int, str] = {
     118: "No permission for the PTZ protocol",
     121: "Could not parse the request",
     124: "Encryption algorithm error",
+    150: "Saved; takes effect after the recorder restarts",
     202: "Reserved account is not authorised",
     203: "Wrong password",
     204: "Account disabled",
@@ -222,17 +230,25 @@ RET_MESSAGES: dict[int, str] = {
     513: "Upgrade data error",
     514: "Upgrade failed",
     515: "Upgrade succeeded",
-    602: "Reboot required",
-    603: "Configuration must be saved",
-    604: "Invalid parameter value",
-    605: "No such user",
-    606: "Authentication error",
+    # Named as the SDK names them (H264_DVR_OPT_RESTART … _CONFIG_NOT_EXIST,
+    # -11400 to -11405 in netsdk.h), which run in the same order as 602 to 607.
+    # An earlier table here called 603 "configuration must be saved"; it is the
+    # recorder saying it took the value and will use it after a reboot.
+    602: "Saved; the recorder's application must restart",
+    603: "Saved; takes effect after the recorder restarts",
+    604: "The recorder could not write the configuration",
+    605: "Not supported by this recorder",
+    606: "The recorder rejected the value",
     607: "No such configuration section",
-    608: "Configuration is locked",
+    608: "The recorder could not parse the configuration",
 }
 
 #: Codes that mean success.
 OK_CODES = frozenset({100, 110, 111, 515})
+
+#: Codes a configuration write answers when it took the value but will only
+#: use it after a restart. A language change answers 603 every time.
+SAVED_PENDING_RESTART = frozenset({150, 602, 603})
 
 
 class StreamType:

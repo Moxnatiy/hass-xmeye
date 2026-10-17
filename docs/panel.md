@@ -33,11 +33,28 @@ is recording and whether it sees motion. The live pictures are on the wall.
 **Archive** — a day timeline with recordings coloured by event, and the archive
 player.
 
-**Settings** — the recorder's own settings, grouped the way the vendor apps
-present them, with typed fields and a save button. The groups are declared as
-data (`SETTINGS_GROUPS`), so adding one is a schema change rather than new
-markup, and each field states its type so the value written back keeps the shape
-the firmware expects. A section is sent whole because the firmware replaces what
+**Settings** — the recorder's own settings, laid out the way VMS lays out a
+recorder's: sections down the side (System, Detection, Channels, Storage,
+Network), each a short list of pages, each page one configuration section of the
+recorder with its fields in cards of labelled rows — switches, numbers with
+their units, lists in the recorder's own words. On a narrow screen the sections
+become a list at the top. The pages are declared as data (`SETTINGS_TREE`), so
+adding one is a schema change rather than new markup, and each field states its
+type so the value written back keeps the shape the firmware expects. A field can
+depend on a switch on the same page and is greyed out while it is off.
+
+An edited row is marked down its edge until it is saved, the bar at the foot of
+the page counts the pending changes and stays in view, and leaving a page or a
+camera with unsaved edits asks first. After a save every edit is compared with
+what the recorder read back; one it did not keep is marked on its row rather
+than quietly snapping back. A value the recorder takes for after a restart — it
+answers 150, 602 or 603, and a change of menu language always answers 603 — is
+reported as saved and pending, since until the restart it reads back the old
+value.
+
+The NTP time zone is an index into the vendor's own list, which runs GMT+00:00
+to GMT+13:00 and then GMT−01:00 to GMT−12:00; that order was read off VMS, which
+hands the stored number straight to its list's `setCurrentIndex`. A section is sent whole because the firmware replaces what
 it is given and defaults anything left out, and what the recorder stored is read
 back afterwards — it clamps values it dislikes without saying so.
 

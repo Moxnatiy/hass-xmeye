@@ -16,6 +16,7 @@ from .const import (
     OK_CODES,
     PTZ_START,
     PTZ_STOP,
+    SAVED_PENDING_RESTART,
     Msg,
     PtzCommand,
     Ret,
@@ -236,8 +237,17 @@ class XmeyeClient:
         return reply.get(name, reply)
 
     async def set_config(self, name: str, value: Any) -> dict[str, Any]:
-        """Write a configuration section."""
-        return await self.command(Msg.CONFIG_SET, {"Name": name, name: value})
+        """Write a configuration section.
+
+        A value the recorder takes but will only use after a restart — the menu
+        language, for one — is answered with 150, 602 or 603. That is a
+        successful write, not a failure: the reply is returned, and
+        :func:`needs_restart` says whether it was one of those.
+        """
+        reply = await self.command(Msg.CONFIG_SET, {"Name": name, name: value}, check=False)
+        if reply.get("Ret") not in SAVED_PENDING_RESTART:
+            self._check(reply, name)
+        return reply
 
     async def config_tree(
         self, roots: Iterable[str] | None = None, *, timeout: float = 20.0
@@ -578,4 +588,9 @@ class XmeyeClient:
         }
 
 
-__all__ = ["PtzCommand", "XmeyeClient"]
+def needs_restart(reply: dict[str, Any]) -> bool:
+    """Whether a configuration write takes effect only after a restart."""
+    return reply.get("Ret") in SAVED_PENDING_RESTART
+
+
+__all__ = ["PtzCommand", "XmeyeClient", "needs_restart"]

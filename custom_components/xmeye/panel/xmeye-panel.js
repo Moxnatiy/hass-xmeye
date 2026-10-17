@@ -270,305 +270,456 @@ const ISSUE_URL = "https://github.com/Moxnatiy/hass-xmeye/issues/new";
 //: travel through the clipboard instead of the URL.
 const ISSUE_URL_LIMIT = 6000;
 
-//: Recorder settings, in the shape the vendor apps present them.
+//: Recorder settings, laid out the way VMS lays out a recorder's: a few
+//: sections, each a short list of pages, each page one configuration section
+//: of the recorder, its fields grouped into cards.
 //:
 //: Declared rather than hand-built: every field says what it is, so one renderer
-//: covers all of them and adding a section is a data change, not new markup.
+//: covers all of them and adding a page is a data change, not new markup.
 //:
-//: Network sections are deliberately absent for now. A wrong value in
-//: NetWork.NetCommon takes the recorder off the network, and that is not
-//: something to ship before the safe sections have proven the write path.
-const SETTINGS_GROUPS = [
+//: Field types:
+//:   toggle    a real boolean on the device
+//:   toggle01  the same, stored as 0 or 1
+//:   number    an integer, with an optional unit after it
+//:   select    one of `options`, [value, label]; `numeric` when the device
+//:             stores the value as a number
+//:   level     a 1…N scale with a word for every step (sensitivity)
+//:   range     a slider over min…max, shown with `display`
+//:   text      free text
+//: `when` names a toggle on the same page that the field only matters under;
+//: while it is off the field is greyed out rather than hidden, so the page does
+//: not jump about as switches are flipped.
+//:
+//: The address fields of the network are absent on purpose. HostIP, GateWay and
+//: Submask are little-endian hex, and a wrong one takes the recorder off the
+//: network with no way back through this panel.
+
+//: What a recorder does when a detector fires. Motion, blinding and video loss
+//: share one EventHandler shape, so the reactions are written down once.
+const EVENT_REACTIONS = [
+  { key: "EventHandler.RecordEnable", label: "Record", type: "toggle" },
+  { key: "EventHandler.RecordLatch", label: "Keep recording after it ends", type: "number",
+    min: 10, max: 300, unit: "s", when: "EventHandler.RecordEnable" },
+  { key: "EventHandler.SnapEnable", label: "Take a snapshot", type: "toggle" },
+  { key: "EventHandler.MessageEnable", label: "Show on the recorder's screen", type: "toggle" },
+  { key: "EventHandler.BeepEnable", label: "Beep", type: "toggle" },
+  { key: "EventHandler.MailEnable", label: "Send an email", type: "toggle" },
+  { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "toggle" },
+  { key: "EventHandler.LogEnable", label: "Write to the log", type: "toggle" },
+];
+
+//: The reactions a storage or network event can have: no recording, no FTP —
+//: there is nothing to record and possibly nowhere to upload.
+const NOTICE_REACTIONS = [
+  { key: "EventHandler.MessageEnable", label: "Show on the recorder's screen", type: "toggle" },
+  { key: "EventHandler.BeepEnable", label: "Beep", type: "toggle" },
+  { key: "EventHandler.MailEnable", label: "Send an email", type: "toggle" },
+  { key: "EventHandler.LogEnable", label: "Write to the log", type: "toggle" },
+];
+
+//: The NTP time zone is an index into this list, in exactly this order — east
+//: of Greenwich first, then west. Read off VMS: CNetNTPConfig fills its combo
+//: box in this order and hands the stored number straight to setCurrentIndex.
+//: The order is not alphabetical by accident; it is the vendor's.
+const TIME_ZONES = [
+  "GMT+00:00", "GMT+01:00", "GMT+02:00", "GMT+03:00", "GMT+03:30", "GMT+04:00",
+  "GMT+04:30", "GMT+05:00", "GMT+05:30", "GMT+05:45", "GMT+06:00", "GMT+06:30",
+  "GMT+07:00", "GMT+08:00", "GMT+09:00", "GMT+09:30", "GMT+10:00", "GMT+11:00",
+  "GMT+12:00", "GMT+13:00", "GMT-01:00", "GMT-02:00", "GMT-03:00", "GMT-03:30",
+  "GMT-04:00", "GMT-05:00", "GMT-06:00", "GMT-07:00", "GMT-08:00", "GMT-09:00",
+  "GMT-10:00", "GMT-11:00", "GMT-12:00",
+];
+
+//: The hours of a day as select options, for "at what hour".
+const HOURS = Array.from({ length: 24 }, (_, h) => [h, `${String(h).padStart(2, "0")}:00`]);
+
+const SETTINGS_TREE = [
   {
-    id: "general",
-    title: "General",
-    section: "General.General",
-    hint: "The device name, and what happens when the disk fills up.",
-    fields: [
-      { key: "MachineName", label: "Device name", type: "text" },
+    id: "system",
+    title: "System",
+    pages: [
       {
-        key: "OverWrite",
-        label: "When the disk is full",
-        type: "select",
-        options: [
-          ["OverWrite", "Overwrite the oldest"],
-          ["StopRecord", "Stop recording"],
+        id: "general",
+        title: "General",
+        section: "General.General",
+        hint: "The recorder's name, and how its own monitor behaves.",
+        cards: [
+          {
+            title: "Device",
+            fields: [{ key: "MachineName", label: "Device name", type: "text" }],
+          },
+          {
+            title: "Recorder's monitor",
+            fields: [
+              { key: "AutoLogout", label: "Log out of the menu after", type: "number",
+                min: 0, max: 120, unit: "min", hint: "0 never logs out" },
+              { key: "ScreenSaveTime", label: "Screensaver after", type: "number",
+                min: 0, max: 120, unit: "min", hint: "0 turns it off" },
+              { key: "BandWidthTips", label: "Warn when bandwidth runs short", type: "toggle01" },
+            ],
+          },
         ],
       },
-      { key: "AutoLogout", label: "Log out of the menu after, min", type: "number", min: 0, max: 120,
-        hint: "0 does not log out" },
-      { key: "ScreenSaveTime", label: "Screensaver, min", type: "number", min: 0, max: 120 },
-      { key: "BandWidthTips", label: "Bandwidth hint", type: "bool01" },
-    ],
-  },
-  {
-    id: "locale",
-    title: "Time and language",
-    section: "General.Location",
-    hint: "Date and time format, and the language of the recorder's own menu.",
-    fields: [
       {
-        key: "Language",
-        label: "Menu language",
-        type: "select",
-        options: [
-          ["English", "English"],
-          ["Russian", "Русский"],
-          ["SimpChinese", "简体中文"],
+        id: "locale",
+        title: "Date and language",
+        section: "General.Location",
+        hint: "How the recorder writes dates and times, and the language of its own menu.",
+        cards: [
+          {
+            title: "Menu",
+            fields: [
+              { key: "Language", label: "Menu language", type: "select",
+                // The firmware knows many more; it does not say which this one
+                // carries, so the common ones are offered and whatever is set
+                // already is kept as an option of its own.
+                options: [["English", "English"], ["Ukrainian", "Українська"],
+                          ["Russian", "Русский"], ["Polish", "Polski"],
+                          ["German", "Deutsch"], ["SimpChinese", "简体中文"]] },
+            ],
+          },
+          {
+            title: "Date and time",
+            fields: [
+              { key: "DateFormat", label: "Date order", type: "select",
+                options: [["YYMMDD", "Year, month, day"], ["MMDDYY", "Month, day, year"],
+                          ["DDMMYY", "Day, month, year"]] },
+              { key: "DateSeparator", label: "Date separator", type: "select",
+                options: [["-", "2026-10-17"], ["/", "2026/10/17"], [".", "2026.10.17"]] },
+              { key: "TimeFormat", label: "Clock", type: "select",
+                options: [["24", "24-hour"], ["12", "12-hour"]] },
+              { key: "DSTRule", label: "Daylight saving time", type: "select",
+                options: [["Off", "Off"], ["On", "On"]] },
+            ],
+          },
         ],
       },
       {
-        key: "DateFormat",
-        label: "Date format",
-        type: "select",
-        options: [["YYMMDD", "YY-MM-DD"], ["MMDDYY", "MM-DD-YY"], ["DDMMYY", "DD-MM-YY"]],
-      },
-      {
-        key: "DateSeparator",
-        label: "Date separator",
-        type: "select",
-        options: [["-", "-"], ["/", "/"], [".", "."]],
-      },
-      {
-        key: "TimeFormat",
-        label: "Time format",
-        type: "select",
-        options: [["24", "24 hours"], ["12", "12 hours"]],
-      },
-      {
-        key: "DSTRule",
-        label: "Daylight saving",
-        type: "select",
-        options: [["Off", "Off"], ["On", "On"]],
-      },
-    ],
-  },
-  {
-    id: "maintain",
-    title: "Maintenance",
-    section: "General.AutoMaintain",
-    hint: "Scheduled reboot, and deleting old recordings automatically.",
-    fields: [
-      {
-        key: "AutoRebootDay",
-        label: "Reboot",
-        type: "select",
-        options: [
-          ["Never", "Never"],
-          ["Everyday", "Every day"],
-          ["Sunday", "Every Sunday"],
-          ["Monday", "Every Monday"],
+        id: "maintain",
+        title: "Maintenance",
+        section: "General.AutoMaintain",
+        hint: "A scheduled reboot, and clearing out old recordings.",
+        cards: [
+          {
+            title: "Scheduled reboot",
+            fields: [
+              { key: "AutoRebootDay", label: "Reboot", type: "select",
+                options: [["Never", "Never"], ["Everyday", "Every day"],
+                          ["Monday", "Every Monday"], ["Tuesday", "Every Tuesday"],
+                          ["Wednesday", "Every Wednesday"], ["Thursday", "Every Thursday"],
+                          ["Friday", "Every Friday"], ["Saturday", "Every Saturday"],
+                          ["Sunday", "Every Sunday"]] },
+              { key: "AutoRebootHour", label: "At", type: "select", numeric: true,
+                options: HOURS },
+            ],
+          },
+          {
+            title: "Old recordings",
+            fields: [
+              { key: "AutoDeleteFilesDays", label: "Delete recordings older than", type: "number",
+                min: 0, max: 365, unit: "days",
+                hint: "0 keeps them until the disk is full" },
+            ],
+          },
         ],
       },
-      { key: "AutoRebootHour", label: "Reboot hour", type: "number", min: 0, max: 23 },
       {
-        key: "AutoDeleteFilesDays",
-        label: "Delete recordings older than (days)",
-        type: "number",
-        min: 0,
-        max: 365,
-        hint: "0 does not delete by age",
+        id: "screen",
+        title: "Recorder's monitor",
+        section: "fVideo.GUISet",
+        hint: "What the recorder draws over the video on the monitor plugged into it. The streams are not affected.",
+        cards: [
+          {
+            title: "Over each camera",
+            fields: [
+              { key: "ChannelTitleEnable", label: "Camera name", type: "toggle" },
+              { key: "TimeTitleEnable", label: "Date and time", type: "toggle" },
+              { key: "RecordStateEnable", label: "Recording mark", type: "toggle" },
+              { key: "AlarmStateEnable", label: "Alarm mark", type: "toggle" },
+              { key: "ChanStateMtdEnable", label: "Motion mark", type: "toggle" },
+              { key: "ChanStateVlsEnable", label: "Video loss mark", type: "toggle" },
+              { key: "ChanStateBitRateEnable", label: "Bitrate", type: "toggle" },
+            ],
+          },
+          {
+            title: "Interface",
+            fields: [
+              { key: "ChanWindowGridEnable", label: "Grid between cameras", type: "toggle" },
+              { key: "QRcodeEnable", label: "QR code for the app", type: "toggle" },
+              { key: "Deflick", label: "Flicker filter", type: "toggle" },
+              { key: "WindowAlpha", label: "Menu transparency", type: "range",
+                min: 0, max: 255, display: "percent" },
+            ],
+          },
+        ],
       },
     ],
   },
   {
-    id: "screen",
-    title: "Screen and OSD",
-    section: "fVideo.GUISet",
-    hint: "What the recorder draws over the video on its own monitor.",
-    fields: [
-      { key: "ChannelTitleEnable", label: "Camera name", type: "bool" },
-      { key: "TimeTitleEnable", label: "Time", type: "bool" },
-      { key: "RecordStateEnable", label: "Recording mark", type: "bool" },
-      { key: "AlarmStateEnable", label: "Alarm mark", type: "bool" },
-      { key: "ChanStateBitRateEnable", label: "Channel bitrate", type: "bool" },
-      { key: "ChanStateMtdEnable", label: "Motion mark", type: "bool" },
-      { key: "ChanStateVlsEnable", label: "Video loss mark", type: "bool" },
-      { key: "ChanWindowGridEnable", label: "Window grid", type: "bool" },
-      { key: "QRcodeEnable", label: "QR code", type: "bool" },
-      { key: "Deflick", label: "Flicker suppression", type: "bool" },
-      { key: "WindowAlpha", label: "Overlay opacity", type: "number", min: 0, max: 255 },
+    id: "detection",
+    title: "Detection",
+    pages: [
+      {
+        id: "motion",
+        title: "Motion",
+        section: "Detect.MotionDetect",
+        perChannel: true,
+        hint: "Motion in the picture, and what the recorder does about it. The detection area is kept as it is; it is drawn on a grid in the recorder's own menu.",
+        cards: [
+          {
+            title: "Detector",
+            fields: [
+              { key: "Enable", label: "Detect motion", type: "toggle" },
+              { key: "Level", label: "Sensitivity", type: "level", min: 1, max: 6,
+                labels: ["Lowest", "Lower", "Medium", "Higher", "Very high", "Highest"],
+                when: "Enable" },
+            ],
+          },
+          { title: "When it detects motion", fields: EVENT_REACTIONS },
+        ],
+      },
+      {
+        id: "blind",
+        title: "Camera covered",
+        section: "Detect.BlindDetect",
+        perChannel: true,
+        hint: "A camera that is covered, sprayed or turned to the wall.",
+        cards: [
+          {
+            title: "Detector",
+            fields: [
+              { key: "Enable", label: "Detect a covered camera", type: "toggle" },
+              { key: "Level", label: "Sensitivity", type: "level", min: 1, max: 6,
+                labels: ["Lowest", "Lower", "Medium", "Higher", "Very high", "Highest"],
+                when: "Enable" },
+            ],
+          },
+          { title: "When a camera is covered", fields: EVENT_REACTIONS },
+        ],
+      },
+      {
+        id: "loss",
+        title: "Video loss",
+        section: "Detect.LossDetect",
+        perChannel: true,
+        hint: "A camera that stops sending a picture: unplugged, powered off, or gone from the network.",
+        cards: [
+          {
+            title: "Detector",
+            fields: [{ key: "Enable", label: "Detect video loss", type: "toggle" }],
+          },
+          { title: "When the picture is lost", fields: EVENT_REACTIONS },
+        ],
+      },
     ],
   },
   {
-    id: "disk-low",
-    title: "Disk — low on space",
-    section: "Storage.StorageLowSpace",
-    hint: "What to do when little free space is left on the disk.",
-    fields: [
-      { key: "Enable", label: "Watch the free space", type: "bool" },
-      { key: "LowerLimit", label: "Threshold, % free", type: "number", min: 1, max: 99 },
-      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
+    id: "channels",
+    title: "Channels",
+    pages: [
+      {
+        id: "overlays",
+        title: "Name and time on the picture",
+        section: "AVEnc.VideoWidget",
+        perChannel: true,
+        hint: "The camera's name and the clock, drawn over its picture by the recorder. Positions are on a 0–8191 grid, whatever the resolution.",
+        cards: [
+          {
+            title: "Camera name",
+            fields: [
+              { key: "ChannelTitle.Name", label: "Name", type: "text" },
+              { key: "ChannelTitleAttribute.PreviewBlend", label: "Show on the recorder's monitor", type: "toggle" },
+              { key: "ChannelTitleAttribute.EncodeBlend", label: "Burn into the recording", type: "toggle" },
+              { key: "ChannelTitleAttribute.RelativePos.0", label: "From the left", type: "number", min: 0, max: 8191 },
+              { key: "ChannelTitleAttribute.RelativePos.1", label: "From the top", type: "number", min: 0, max: 8191 },
+            ],
+          },
+          {
+            title: "Date and time",
+            fields: [
+              { key: "TimeTitleAttribute.PreviewBlend", label: "Show on the recorder's monitor", type: "toggle" },
+              { key: "TimeTitleAttribute.EncodeBlend", label: "Burn into the recording", type: "toggle" },
+              { key: "TimeTitleAttribute.RelativePos.0", label: "From the left", type: "number", min: 0, max: 8191 },
+              { key: "TimeTitleAttribute.RelativePos.1", label: "From the top", type: "number", min: 0, max: 8191 },
+            ],
+          },
+        ],
+      },
+      {
+        id: "serial-ptz",
+        title: "PTZ over RS-485",
+        section: "Uart.PTZ",
+        perChannel: true,
+        hint: "Only for an analogue PTZ camera wired to the recorder's RS-485 port. A network camera is turned over the network and needs nothing here.",
+        cards: [
+          {
+            title: "Protocol",
+            fields: [
+              { key: "ProtocolName", label: "Protocol", type: "select",
+                options: [["PELCOD", "Pelco-D"], ["PELCOP", "Pelco-P"], ["NONE", "None"]] },
+              { key: "DeviceNo", label: "Camera address", type: "number", min: 1, max: 255 },
+              { key: "PortNo", label: "Port", type: "number", min: 1, max: 8 },
+            ],
+          },
+          {
+            title: "Serial line",
+            fields: [
+              { key: "Attribute.0", label: "Baud rate", type: "select", numeric: true,
+                options: [[1200, "1200"], [2400, "2400"], [4800, "4800"], [9600, "9600"],
+                          [19200, "19200"], [38400, "38400"], [57600, "57600"], [115200, "115200"]] },
+              { key: "Attribute.2", label: "Data bits", type: "select", numeric: true,
+                options: [[5, "5"], [6, "6"], [7, "7"], [8, "8"]] },
+              { key: "Attribute.1", label: "Parity", type: "select",
+                options: [["NONE", "None"], ["ODD", "Odd"], ["EVEN", "Even"], ["MARK", "Mark"],
+                          ["SPACE", "Space"]] },
+              { key: "Attribute.3", label: "Stop bits", type: "select", numeric: true,
+                options: [[1, "1"], [2, "2"]] },
+            ],
+          },
+        ],
+      },
     ],
   },
   {
-    id: "disk-fail",
-    title: "Disk — failure",
-    section: "Storage.StorageFailure",
-    hint: "What to do when the disk fails.",
-    fields: [
-      { key: "Enable", label: "Watch for failures", type: "bool" },
-      { key: "RebootEnable", label: "Reboot on failure", type: "bool" },
-      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
-    ],
-  },
-  {
-    id: "disk-none",
-    title: "Disk — missing",
-    section: "Storage.StorageNotExist",
-    hint: "What to do when no disk is present.",
-    fields: [
-      { key: "Enable", label: "Watch", type: "bool" },
-      { key: "EventHandler.MessageEnable", label: "Show a message", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
+    id: "storage",
+    title: "Storage",
+    pages: [
+      {
+        id: "disk-full",
+        title: "When the disk is full",
+        section: "General.General",
+        hint: "What the recorder does once there is no room left for new recordings.",
+        cards: [
+          {
+            title: "Full disk",
+            fields: [
+              { key: "OverWrite", label: "When the disk is full", type: "select",
+                options: [["OverWrite", "Overwrite the oldest recordings"],
+                          ["StopRecord", "Stop recording"]] },
+            ],
+          },
+        ],
+      },
+      {
+        id: "disk-low",
+        title: "Low on space",
+        section: "Storage.StorageLowSpace",
+        hint: "A warning before the disk fills up.",
+        cards: [
+          {
+            title: "Watch",
+            fields: [
+              { key: "Enable", label: "Warn when space runs low", type: "toggle" },
+              { key: "LowerLimit", label: "Below", type: "number", min: 1, max: 99, unit: "%",
+                hint: "of the disk free", when: "Enable" },
+            ],
+          },
+          { title: "Then", fields: NOTICE_REACTIONS },
+        ],
+      },
+      {
+        id: "disk-fail",
+        title: "Disk failure",
+        section: "Storage.StorageFailure",
+        hint: "A disk that cannot be read or written.",
+        cards: [
+          {
+            title: "Watch",
+            fields: [
+              { key: "Enable", label: "Watch for disk errors", type: "toggle" },
+              { key: "RebootEnable", label: "Reboot the recorder", type: "toggle", when: "Enable" },
+            ],
+          },
+          { title: "Then", fields: NOTICE_REACTIONS },
+        ],
+      },
+      {
+        id: "disk-none",
+        title: "No disk",
+        section: "Storage.StorageNotExist",
+        hint: "The recorder started without a disk, or lost the one it had.",
+        cards: [
+          {
+            title: "Watch",
+            fields: [{ key: "Enable", label: "Warn when there is no disk", type: "toggle" }],
+          },
+          { title: "Then", fields: NOTICE_REACTIONS.filter((f) => !f.key.endsWith("LogEnable")) },
+        ],
+      },
     ],
   },
   {
     id: "network",
     title: "Network",
-    section: "NetWork.NetCommon",
-    //: The address fields are not here on purpose. HostIP, GateWay and Submask
-    //: are little-endian hex, and a wrong one takes the recorder off the network
-    //: with no way back through this panel.
-    warning:
-      "Changing a port breaks the current connection: after saving, update the " +
-      "port in the integration options. The address, gateway and mask are " +
-      "deliberately not editable here.",
-    fields: [
-      { key: "HostName", label: "Network name", type: "text" },
-      { key: "HttpPort", label: "HTTP port", type: "number", min: 1, max: 65535 },
-      { key: "TCPPort", label: "DVRIP port", type: "number", min: 1, max: 65535,
-        hint: "The port this integration uses" },
-      { key: "UDPPort", label: "UDP port", type: "number", min: 1, max: 65535 },
-      { key: "TCPMaxConn", label: "Max simultaneous connections", type: "number", min: 4, max: 32 },
-      { key: "MaxBps", label: "Bandwidth cap, kbit/s", type: "number", min: 0, max: 100000,
-        hint: "0 means no cap" },
-      { key: "MonMode", label: "Live transport", type: "select",
-        options: [["TCP", "TCP"], ["UDP", "UDP"]] },
-      { key: "TransferPlan", label: "Transfer priority", type: "text",
-        hint: "The same value as in the recorder's own menu" },
-      { key: "UseHSDownLoad", label: "Fast download", type: "bool" },
-    ],
-  },
-  {
-    id: "ntp",
-    title: "Network time (NTP)",
-    section: "NetWork.NetNTP",
-    hint: "Keeping the recorder's clock in step with a time server.",
-    fields: [
-      { key: "Enable", label: "Enable NTP", type: "bool" },
-      { key: "Server.Name", label: "Server", type: "text" },
-      { key: "Server.Port", label: "Port", type: "number", min: 1, max: 65535 },
-      { key: "TimeZone", label: "Time zone (index)", type: "number", min: 0, max: 40 },
-      { key: "UpdatePeriod", label: "Update period, min", type: "number", min: 1, max: 1440 },
-    ],
-  },
-  {
-    id: "motion",
-    title: "Motion detection",
-    section: "Detect.MotionDetect",
-    perChannel: true,
-    hint: "Sensitivity, and what happens on motion. The detection area is saved as it is — it is edited on a grid on the recorder itself.",
-    fields: [
-      { key: "Enable", label: "Enabled", type: "bool" },
-      { key: "Level", label: "Sensitivity", type: "select",
-        options: [[1, "1 — lowest"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — highest"]],
-        numeric: true },
-      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
-    ],
-  },
-  {
-    id: "blind",
-    title: "Camera blinded",
-    section: "Detect.BlindDetect",
-    perChannel: true,
-    hint: "What to do when a camera is covered or blinded.",
-    fields: [
-      { key: "Enable", label: "Enabled", type: "bool" },
-      { key: "Level", label: "Sensitivity", type: "select",
-        options: [[1, "1 — lowest"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [6, "6 — highest"]],
-        numeric: true },
-      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
-    ],
-  },
-  {
-    id: "loss",
-    title: "Video loss",
-    section: "Detect.LossDetect",
-    perChannel: true,
-    hint: "What to do when a camera stops sending a signal.",
-    fields: [
-      { key: "Enable", label: "Enabled", type: "bool" },
-      { key: "EventHandler.RecordEnable", label: "Start recording", type: "bool" },
-      { key: "EventHandler.RecordLatch", label: "Recording length, s", type: "number", min: 1, max: 600 },
-      { key: "EventHandler.MessageEnable", label: "Message", type: "bool" },
-      { key: "EventHandler.SnapEnable", label: "Snapshot", type: "bool" },
-      { key: "EventHandler.BeepEnable", label: "Beep", type: "bool" },
-      { key: "EventHandler.MailEnable", label: "Send mail", type: "bool" },
-      { key: "EventHandler.FTPEnable", label: "Upload to FTP", type: "bool" },
-      { key: "EventHandler.LogEnable", label: "Write to the log", type: "bool" },
-    ],
-  },
-  {
-    id: "widget",
-    title: "Channel overlays",
-    section: "AVEnc.VideoWidget",
-    perChannel: true,
-    hint: "The camera name and the time drawn over the picture. Coordinates are on a 0…8191 grid, independent of the resolution.",
-    fields: [
-      { key: "ChannelTitle.Name", label: "Camera name", type: "text" },
-      { key: "ChannelTitleAttribute.PreviewBlend", label: "Name: show on the monitor", type: "bool" },
-      { key: "ChannelTitleAttribute.EncodeBlend", label: "Name: burn into the stream", type: "bool" },
-      { key: "ChannelTitleAttribute.RelativePos.0", label: "Name: X", type: "number", min: 0, max: 8191 },
-      { key: "ChannelTitleAttribute.RelativePos.1", label: "Name: Y", type: "number", min: 0, max: 8191 },
-      { key: "TimeTitleAttribute.PreviewBlend", label: "Time: show on the monitor", type: "bool" },
-      { key: "TimeTitleAttribute.EncodeBlend", label: "Time: burn into the stream", type: "bool" },
-      { key: "TimeTitleAttribute.RelativePos.0", label: "Time: X", type: "number", min: 0, max: 8191 },
-      { key: "TimeTitleAttribute.RelativePos.1", label: "Time: Y", type: "number", min: 0, max: 8191 },
-    ],
-  },
-  {
-    id: "ptz",
-    title: "PTZ",
-    section: "Uart.PTZ",
-    perChannel: true,
-    hint: "Driving a pan-tilt-zoom camera over the serial port.",
-    fields: [
-      { key: "ProtocolName", label: "Protocol", type: "text",
-        hint: "The same name as in the recorder's menu (PELCOD, for example)" },
-      { key: "DeviceNo", label: "Device address", type: "number", min: 1, max: 255 },
-      { key: "PortNo", label: "Port number", type: "number", min: 1, max: 8 },
-      { key: "Attribute.0", label: "Speed, bit/s", type: "select", numeric: true,
-        options: [[1200, "1200"], [2400, "2400"], [4800, "4800"], [9600, "9600"],
-                  [19200, "19200"], [38400, "38400"], [57600, "57600"], [115200, "115200"]] },
-      { key: "Attribute.1", label: "Parity", type: "text",
-        hint: "The same value as in the recorder's menu (NONE, for example)" },
-      { key: "Attribute.2", label: "Data bits", type: "number", min: 5, max: 8 },
-      { key: "Attribute.3", label: "Stop bits", type: "number", min: 1, max: 2 },
+    pages: [
+      {
+        id: "ports",
+        title: "Ports and traffic",
+        section: "NetWork.NetCommon",
+        warning:
+          "Changing a port breaks the connection this page is using: after saving, " +
+          "set the new port in the integration's options. The address, gateway and " +
+          "mask are deliberately not editable here.",
+        cards: [
+          {
+            title: "Name",
+            fields: [{ key: "HostName", label: "Network name", type: "text" }],
+          },
+          {
+            title: "Ports",
+            fields: [
+              { key: "TCPPort", label: "Media port", type: "number", min: 1, max: 65535,
+                hint: "The port this integration talks to" },
+              { key: "HttpPort", label: "Web port", type: "number", min: 1, max: 65535 },
+              { key: "UDPPort", label: "UDP port", type: "number", min: 1, max: 65535 },
+            ],
+          },
+          {
+            title: "Traffic",
+            fields: [
+              { key: "TCPMaxConn", label: "Connections at once", type: "number", min: 4, max: 32,
+                hint: "Every wall tile and archive player takes one" },
+              { key: "MaxBps", label: "Upload limit", type: "number", min: 0, max: 100000,
+                unit: "kbit/s", hint: "0 means no limit" },
+              { key: "TransferPlan", label: "When the network is slow", type: "select",
+                options: [["AutoAdapt", "Adapt automatically"], ["Quality", "Keep the quality"],
+                          ["Fluency", "Keep it smooth"], ["Transmission", "Favour throughput"]] },
+              { key: "MonMode", label: "Live video over", type: "select",
+                options: [["TCP", "TCP"], ["UDP", "UDP"]] },
+              { key: "UseHSDownLoad", label: "Fast download", type: "toggle" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "ntp",
+        title: "Time server",
+        section: "NetWork.NetNTP",
+        hint: "Keeping the recorder's clock right by asking a time server.",
+        cards: [
+          {
+            title: "Time server",
+            fields: [
+              { key: "Enable", label: "Set the clock from a time server", type: "toggle" },
+              { key: "Server.Name", label: "Server", type: "text", when: "Enable",
+                hint: "pool.ntp.org, for example" },
+              { key: "Server.Port", label: "Port", type: "number", min: 1, max: 65535, when: "Enable" },
+              { key: "TimeZone", label: "Time zone", type: "select", numeric: true,
+                options: TIME_ZONES.map((zone, index) => [index, zone]), when: "Enable" },
+              { key: "UpdatePeriod", label: "Check every", type: "number", min: 1, max: 1440,
+                unit: "min", when: "Enable" },
+            ],
+          },
+        ],
+      },
     ],
   },
 ];
+
+//: Every page with its section beside it, for finding one by id.
+const SETTINGS_PAGES = SETTINGS_TREE.flatMap((group) =>
+  group.pages.map((page) => ({ ...page, group: group.id }))
+);
 
 //: Thumbnail width in the channel grid. Home Assistant scales the frame itself.
 const THUMB_WIDTH = 480;
@@ -806,11 +957,13 @@ class XmeyePanel extends HTMLElement {
     this._logQueue = [];
     this._logTimer = null;
     this._watchTimer = null;
-    //: Recorder settings: which group is open, what was read, and what the user
+    //: Recorder settings: which page is open, what was read, and what the user
     //: has edited but not yet written.
-    this._settingsGroup = SETTINGS_GROUPS[0].id;
+    this._settingsGroup = SETTINGS_PAGES[0].id;
     this._settings = null;
     this._settingsEdits = {};
+    //: Fields whose last save the recorder did not take, by key.
+    this._settingsRejected = {};
     //: Which channel a per-channel section is showing.
     this._settingsChannel = 0;
     this._settingsSaving = false;
@@ -3577,63 +3730,116 @@ class XmeyePanel extends HTMLElement {
    * copy that was read and sends all of it back.
    */
   _settingsView() {
-    const group =
-      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
+    const page = this._settingsPage();
 
-    const menu = SETTINGS_GROUPS.map(
-      (g) =>
-        `<button class="leaf ${g.id === group.id ? "active" : ""}" data-group="${g.id}">
-           ${t(g.title)}
-         </button>`
+    // The pages, grouped under their sections. On a narrow screen the same list
+    // is a select instead: a column of links beside the form leaves the form no
+    // room on a phone.
+    const nav = SETTINGS_TREE.map(
+      (group) => `
+        <div class="cfg-group">
+          <div class="cfg-group-title">${t(group.title)}</div>
+          ${group.pages
+            .map(
+              (p) =>
+                `<button class="cfg-link ${p.id === page.id ? "active" : ""}" data-page="${p.id}">${t(p.title)}</button>`
+            )
+            .join("")}
+        </div>`
     ).join("");
+    const picker = `
+      <select class="cfg-picker" id="cfgpage" aria-label="${t("Settings page")}">
+        ${SETTINGS_TREE.map(
+          (group) =>
+            `<optgroup label="${escapeHtml(t(group.title))}">${group.pages
+              .map(
+                (p) =>
+                  `<option value="${p.id}" ${p.id === page.id ? "selected" : ""}>${escapeHtml(t(p.title))}</option>`
+              )
+              .join("")}</optgroup>`
+        ).join("")}
+      </select>`;
 
     let body;
-    if (!this._settings || this._settings.section !== group.section) {
+    if (!this._settings || this._settings.section !== page.section) {
       body = `<div class="empty">${t("Reading the settings…")}</div>`;
     } else if (this._settings.error) {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
     } else {
-      // A per-channel section is an array indexed by channel, so the form edits
-      // one element while the save still sends the whole array back.
-      const raw = this._settings.value;
-      const value = (group.perChannel && Array.isArray(raw) ? raw[this._settingsChannel] : raw) || {};
-      const rows = group.fields
-        .map((field) => {
-          const current =
-            field.key in this._settingsEdits
-              ? this._settingsEdits[field.key]
-              : this._settingRead(value, field.key);
-          return `
-            <div class="setting">
-              <label for="set-${field.key}">${t(field.label)}</label>
-              ${this._settingInput(field, current)}
-              ${field.hint ? `<div class="hint">${t(field.hint)}</div>` : ""}
-            </div>`;
-        })
+      const value = this._settingsValue(page);
+      const cards = page.cards
+        .map(
+          (card) => `
+            <section class="cfg-card">
+              ${card.title ? `<h3>${t(card.title)}</h3>` : ""}
+              ${card.fields.map((field) => this._settingRow(page, field, value)).join("")}
+            </section>`
+        )
         .join("");
-      const dirty = Object.keys(this._settingsEdits).length;
       body = `
-        ${group.warning ? `<p class="warn">${t(group.warning)}</p>` : ""}
-        ${group.perChannel ? this._settingsChannelPicker() : ""}
-        ${group.hint ? `<p class="hint pad">${t(group.hint)}</p>` : ""}
-        <div class="settings-form">${rows}</div>
-        <div class="toolbar">
-          <button class="primary" id="savesettings" ${dirty && !this._settingsSaving ? "" : "disabled"}>
-            ${this._settingsSaving ? t("Saving…") : dirty ? t("Save ({count})", { count: dirty }) : t("No changes")}
-          </button>
-          <button class="ghost" id="resetsettings" ${dirty ? "" : "disabled"}>${t("Reset")}</button>
-          ${this._settingsNote ? `<span class="hint">${escapeHtml(this._settingsNote)}</span>` : ""}
-        </div>`;
+        ${page.warning ? `<p class="warn">${t(page.warning)}</p>` : ""}
+        ${page.perChannel ? this._settingsChannelPicker() : ""}
+        <div class="cfg-cards">${cards}</div>
+        ${this._settingsBar()}`;
     }
 
     return `
-      <div class="split">
-        <aside class="tree">${menu}</aside>
-        <section class="viewer">
-          <div class="viewer-head">${t(group.title)} <span class="hint">${group.section}</span></div>
-          <div class="viewer-body">${body}</div>
+      <div class="cfg">
+        <nav class="cfg-nav" aria-label="${t("Settings")}">${nav}</nav>
+        <section class="cfg-page">
+          ${picker}
+          <header class="cfg-head">
+            <h2>${t(page.title)}</h2>
+            ${page.hint ? `<p>${t(page.hint)}</p>` : ""}
+          </header>
+          ${body}
         </section>
       </div>`;
+  }
+
+  /** The page open now, by id, falling back to the first. */
+  _settingsPage() {
+    return SETTINGS_PAGES.find((p) => p.id === this._settingsGroup) || SETTINGS_PAGES[0];
+  }
+
+  /** What the recorder holds for this page — one channel's entry, when per channel. */
+  _settingsValue(page) {
+    const raw = this._settings && this._settings.value;
+    return (page.perChannel && Array.isArray(raw) ? raw[this._settingsChannel] : raw) || {};
+  }
+
+  /** A field's value as the form should show it: the edit if there is one. */
+  _settingCurrent(field, value) {
+    return field.key in this._settingsEdits
+      ? this._settingsEdits[field.key]
+      : this._settingRead(value, field.key);
+  }
+
+  /** One labelled row: the words on the left, the control on the right. */
+  _settingRow(page, field, value) {
+    const current = this._settingCurrent(field, value);
+    const id = `set-${field.key.replace(/\./g, "-")}`;
+    const changed = field.key in this._settingsEdits;
+    const rejected = field.key in this._settingsRejected;
+    const off = this._settingDisabled(page, field, value);
+    return `
+      <div class="cfg-row ${changed ? "changed" : ""} ${rejected ? "rejected" : ""} ${off ? "off" : ""}"
+           data-row="${field.key}">
+        <label for="${id}">
+          <span>${t(field.label)}</span>
+          ${field.hint ? `<small>${t(field.hint)}</small>` : ""}
+          ${rejected ? `<small class="cfg-rejected">${t("The recorder did not accept this value")}</small>` : ""}
+        </label>
+        <div class="cfg-control">${this._settingInput(field, current, id, off)}</div>
+      </div>`;
+  }
+
+  /** Whether a field is greyed out because the toggle it depends on is off. */
+  _settingDisabled(page, field, value) {
+    if (!field.when) return false;
+    const master = page.cards.flatMap((c) => c.fields).find((f) => f.key === field.when);
+    const on = master ? this._settingCurrent(master, value) : true;
+    return master && master.type === "toggle01" ? Number(on) !== 1 : on !== true;
   }
 
   /**
@@ -3670,11 +3876,28 @@ class XmeyePanel extends HTMLElement {
     return target;
   }
 
-  /** One input, chosen by the field's declared type. */
-  _settingInput(field, current) {
-    const id = `set-${field.key.replace(/\./g, "-")}`;
+  /** One control, chosen by the field's declared type. */
+  _settingInput(field, current, id, off) {
+    const common = `id="${id}" data-setting="${field.key}" ${off ? "disabled" : ""}`;
+    if (field.type === "toggle" || field.type === "toggle01") {
+      // Some flags are real booleans, others are 0/1 integers; the type says
+      // which, so the value written back keeps the shape the firmware expects.
+      const on = field.type === "toggle" ? current === true : Number(current) === 1;
+      return `
+        <span class="switch">
+          <input type="checkbox" role="switch" ${common} ${on ? "checked" : ""}>
+          <span class="switch-track" aria-hidden="true"></span>
+        </span>`;
+    }
     if (field.type === "select") {
-      const options = field.options
+      const known = field.options.some(([key]) => String(key) === String(current));
+      // A value the schema does not list — set from the recorder's own menu, or
+      // by a firmware with more choices — stays selectable as itself, rather than
+      // the form quietly showing the first option and saving that instead.
+      const options = [
+        ...field.options,
+        ...(known || current == null || current === "" ? [] : [[current, String(current)]]),
+      ]
         .map(
           ([key, label]) =>
             `<option value="${escapeHtml(String(key))}" ${
@@ -3682,33 +3905,104 @@ class XmeyePanel extends HTMLElement {
             }>${escapeHtml(t(label))}</option>`
         )
         .join("");
-      return `<select id="${id}" data-field="${field.key}">${options}</select>`;
+      return `<select ${common}>${options}</select>`;
     }
     if (field.type === "number") {
-      return `<input type="number" id="${id}" data-field="${field.key}"
-                     min="${field.min ?? 0}" max="${field.max ?? 9999}"
-                     value="${current ?? 0}">`;
+      return `
+        <span class="cfg-number">
+          <input type="number" inputmode="numeric" ${common}
+                 min="${field.min ?? 0}" max="${field.max ?? 99999}" value="${current ?? 0}">
+          ${field.unit ? `<span class="cfg-unit">${t(field.unit)}</span>` : ""}
+        </span>`;
     }
-    if (field.type === "bool01" || field.type === "bool") {
-      // Some fields are real booleans, others are 0/1 integers; the type says
-      // which, so the value written back keeps the shape the firmware expects.
-      const on = field.type === "bool" ? current === true : Number(current) === 1;
-      return `<input type="checkbox" id="${id}" data-field="${field.key}" ${on ? "checked" : ""}>`;
+    if (field.type === "level") {
+      const step = Math.min(field.max, Math.max(field.min, Number(current) || field.min));
+      return `
+        <span class="cfg-level">
+          <input type="range" ${common} min="${field.min}" max="${field.max}" step="1" value="${step}">
+          <output for="${id}">${t(field.labels[step - field.min])}</output>
+        </span>`;
     }
-    return `<input type="text" id="${id}" data-field="${field.key}"
-                   value="${escapeHtml(String(current ?? ""))}">`;
+    if (field.type === "range") {
+      const v = Number(current) || 0;
+      return `
+        <span class="cfg-level">
+          <input type="range" ${common} min="${field.min}" max="${field.max}" step="1" value="${v}">
+          <output for="${id}">${this._settingRangeText(field, v)}</output>
+        </span>`;
+    }
+    return `<input type="text" ${common} value="${escapeHtml(String(current ?? ""))}">`;
   }
 
-  /** Update the save button without redrawing the form under the cursor. */
-  _refreshSettingsToolbar() {
-    const save = this.shadowRoot.getElementById("savesettings");
-    const reset = this.shadowRoot.getElementById("resetsettings");
-    const dirty = Object.keys(this._settingsEdits).length;
-    if (save) {
-      save.disabled = !dirty || this._settingsSaving;
-      save.textContent = dirty ? t("Save ({count})", { count: dirty }) : t("No changes");
+  /** The words beside a range slider. */
+  _settingRangeText(field, value) {
+    if (field.display === "percent") {
+      return `${Math.round(((value - field.min) / (field.max - field.min)) * 100)}%`;
     }
-    if (reset) reset.disabled = !dirty;
+    return String(value);
+  }
+
+  /** The save bar's buttons; called again whenever the bar is redrawn. */
+  _bindSettingsBar() {
+    const root = this.shadowRoot;
+    const save = root.getElementById("savesettings");
+    if (save) save.addEventListener("click", () => this._saveSettings());
+    const reset = root.getElementById("resetsettings");
+    if (reset)
+      reset.addEventListener("click", () => {
+        this._settingsEdits = {};
+        this._settingsRejected = {};
+        this._settingsNote = null;
+        this._render();
+      });
+  }
+
+  /** Every field of the open page. */
+  _settingFields() {
+    return this._settingsPage().cards.flatMap((card) => card.fields);
+  }
+
+  /**
+   * The save bar, kept at the foot of the page while it scrolls.
+   *
+   * It says what is pending, and after a save what the recorder made of it.
+   */
+  _settingsBar() {
+    const dirty = Object.keys(this._settingsEdits).length;
+    const saving = this._settingsSaving;
+    const status = saving
+      ? t("Saving…")
+      : dirty
+        ? t("{count} unsaved changes", { count: dirty })
+        : this._settingsNote || t("No changes");
+    return `
+      <div class="cfg-bar ${dirty ? "dirty" : ""}">
+        <span class="cfg-status" id="settingsstatus">${escapeHtml(status)}</span>
+        <button class="ghost" id="resetsettings" ${dirty && !saving ? "" : "disabled"}>${t("Discard")}</button>
+        <button class="primary" id="savesettings" ${dirty && !saving ? "" : "disabled"}>${t("Save")}</button>
+      </div>`;
+  }
+
+  /** Update the bar and the greyed-out rows without redrawing under the cursor. */
+  _refreshSettingsToolbar() {
+    const bar = this.shadowRoot.querySelector(".cfg-bar");
+    if (bar) {
+      const fresh = document.createElement("div");
+      fresh.innerHTML = this._settingsBar();
+      bar.replaceWith(fresh.firstElementChild);
+      this._bindSettingsBar();
+    }
+    const page = this._settingsPage();
+    const value = this._settingsValue(page);
+    for (const field of this._settingFields()) {
+      const row = this.shadowRoot.querySelector(`[data-row="${field.key}"]`);
+      if (!row) continue;
+      row.classList.toggle("changed", field.key in this._settingsEdits);
+      const off = this._settingDisabled(page, field, value);
+      row.classList.toggle("off", off);
+      const input = row.querySelector("[data-setting]");
+      if (input) input.disabled = off;
+    }
   }
 
   /** Channel selector for the sections that hold one entry per channel. */
@@ -3723,54 +4017,60 @@ class XmeyePanel extends HTMLElement {
       )
       .join("");
     return `
-      <div class="toolbar">
-        <label class="hint" for="setchannel">${t("Channel")}</label>
+      <div class="cfg-channel">
+        <label for="setchannel">${t("Camera")}</label>
         <select id="setchannel">${options}</select>
       </div>`;
   }
 
+  /** Leave the page's edits behind, after asking if there are any. */
+  _settingsMayLeave() {
+    const dirty = Object.keys(this._settingsEdits).length;
+    return !dirty || window.confirm(t("Discard {count} unsaved changes?", { count: dirty }));
+  }
+
   async _loadSettings() {
-    const group =
-      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
-    this._settings = { section: group.section, loading: true };
+    const page = this._settingsPage();
+    this._settings = { section: page.section, loading: true };
     this._settingsEdits = {};
+    this._settingsRejected = {};
     this._settingsNote = null;
     this._render();
     try {
       const reply = await this._ws({
         type: "xmeye/config",
         entry_id: this._entryId,
-        section: group.section,
+        section: page.section,
       });
-      this._settings = { section: group.section, value: reply.value };
+      this._settings = { section: page.section, value: reply.value };
     } catch (err) {
-      this._settings = { section: group.section, error: err.message || String(err) };
+      this._settings = { section: page.section, error: err.message || String(err) };
     }
     this._render();
   }
 
   async _saveSettings() {
-    const group =
-      SETTINGS_GROUPS.find((g) => g.id === this._settingsGroup) || SETTINGS_GROUPS[0];
+    const page = this._settingsPage();
     if (!this._settings || !this._settings.value) return;
     this._settingsSaving = true;
-    this._render();
+    this._refreshSettingsToolbar();
 
     // Send the section whole, with the edits merged in: the firmware replaces
     // whatever it is given and defaults the fields left out.
+    const edits = { ...this._settingsEdits };
     let merged;
-    if (group.perChannel && Array.isArray(this._settings.value)) {
+    if (page.perChannel && Array.isArray(this._settings.value)) {
       // Every channel is sent back, with only the edited one changed: the
       // firmware replaces the section whole and would default the rest.
       merged = this._settings.value.map((entry, index) =>
         index === this._settingsChannel ? { ...entry } : entry
       );
-      for (const [path, value] of Object.entries(this._settingsEdits)) {
+      for (const [path, value] of Object.entries(edits)) {
         this._settingWrite(merged[this._settingsChannel], path, value);
       }
     } else {
       merged = { ...this._settings.value };
-      for (const [path, value] of Object.entries(this._settingsEdits)) {
+      for (const [path, value] of Object.entries(edits)) {
         this._settingWrite(merged, path, value);
       }
     }
@@ -3778,14 +4078,32 @@ class XmeyePanel extends HTMLElement {
       const reply = await this._ws({
         type: "xmeye/config_set",
         entry_id: this._entryId,
-        section: group.section,
+        section: page.section,
         value: merged,
       });
-      // Show what the recorder stored, not what we asked for: it clamps values
-      // it dislikes without saying so.
-      this._settings = { section: group.section, value: reply.value };
       this._settingsEdits = {};
-      this._settingsNote = t("Saved");
+      this._settingsRejected = {};
+      if (reply.restart) {
+        // Taken, for after a restart: until then the recorder reads back the
+        // old value, so what was written is what the form keeps showing.
+        this._settings = { section: page.section, value: merged };
+        this._settingsNote = t("Saved. It takes effect after the recorder restarts.");
+      } else {
+        // Show what the recorder stored, not what was asked for: it clamps or
+        // ignores a value it dislikes without saying so. Every edit is checked
+        // against what came back, and one that did not stick says so on its row.
+        this._settings = { section: page.section, value: reply.value };
+        const stored = this._settingsValue(page);
+        for (const [path, value] of Object.entries(edits)) {
+          if (String(this._settingRead(stored, path)) !== String(value)) {
+            this._settingsRejected[path] = true;
+          }
+        }
+        const kept = Object.keys(this._settingsRejected).length;
+        this._settingsNote = kept
+          ? t("Saved, but the recorder kept its own value for {count}", { count: kept })
+          : t("Saved");
+      }
     } catch (err) {
       this._settingsNote = t("Could not save: {error}", { error: err.message || err });
     }
@@ -4310,58 +4628,79 @@ class XmeyePanel extends HTMLElement {
         this._remountLive();
       });
 
-    root.querySelectorAll("[data-group]").forEach((button) =>
-      button.addEventListener("click", () => {
-        this._settingsGroup = button.dataset.group;
-        this._loadSettings();
-      })
+    const openPage = (id) => {
+      if (id === this._settingsGroup || !this._settingsMayLeave()) {
+        this._render();
+        return;
+      }
+      this._settingsGroup = id;
+      this._loadSettings();
+    };
+    root.querySelectorAll("[data-page]").forEach((button) =>
+      button.addEventListener("click", () => openPage(button.dataset.page))
     );
+    const pagePicker = root.getElementById("cfgpage");
+    if (pagePicker) pagePicker.addEventListener("change", () => openPage(pagePicker.value));
 
-    root.querySelectorAll("[data-field]").forEach((input) =>
+    root.querySelectorAll("[data-setting]").forEach((input) => {
+      const field = this._settingFields().find((f) => f.key === input.dataset.setting);
+      if (!field) return;
+      // A slider says where it is while it is dragged, not only once let go.
+      if (input.type === "range") {
+        input.addEventListener("input", () => {
+          const output = input.parentElement.querySelector("output");
+          if (!output) return;
+          output.textContent =
+            field.type === "level"
+              ? t(field.labels[Number(input.value) - field.min])
+              : this._settingRangeText(field, Number(input.value));
+        });
+      }
       input.addEventListener("change", () => {
-        const field = SETTINGS_GROUPS.flatMap((g) => g.fields).find(
-          (f) => f.key === input.dataset.field
-        );
         let value;
         if (input.type === "checkbox") {
-          value = field && field.type === "bool" ? input.checked : input.checked ? 1 : 0;
+          value = field.type === "toggle" ? input.checked : input.checked ? 1 : 0;
         } else if (input.type === "number") {
-          value = Number(input.value);
-        } else if (field && field.numeric) {
-          // The option values are numbers on the device; a select hands back a
-          // string, and the firmware ignores a field of the wrong type.
+          // Clamped here: the firmware clamps silently, and the form should not
+          // promise a value the recorder will not keep.
+          const n = Math.round(Number(input.value) || 0);
+          value = Math.min(field.max ?? Infinity, Math.max(field.min ?? -Infinity, n));
+          input.value = value;
+        } else if (input.type === "range" || field.numeric) {
+          // The device stores these as numbers; a control hands back a string,
+          // and the firmware ignores a field of the wrong type.
           value = Number(input.value);
         } else {
           value = input.value;
         }
-        this._settingsEdits[input.dataset.field] = value;
-        // Only the toolbar changes, so the form is left alone and the field
-        // being edited keeps focus.
+        const stored = this._settingRead(this._settingsValue(this._settingsPage()), field.key);
+        // Back to what the recorder holds is no change at all.
+        if (String(stored) === String(value)) delete this._settingsEdits[field.key];
+        else this._settingsEdits[field.key] = value;
+        delete this._settingsRejected[field.key];
+        // Only the bar and the dependent rows change, so the form is left alone
+        // and the field being edited keeps focus.
         this._refreshSettingsToolbar();
-      })
-    );
+      });
+    });
 
     const setChannel = root.getElementById("setchannel");
     if (setChannel)
       setChannel.addEventListener("change", () => {
-        this._settingsChannel = Number(setChannel.value);
         // Edits belong to the channel they were made on; carrying them over
         // would silently write one camera's values onto another.
+        if (!this._settingsMayLeave()) {
+          setChannel.value = String(this._settingsChannel);
+          return;
+        }
+        this._settingsChannel = Number(setChannel.value);
         this._settingsEdits = {};
+        this._settingsRejected = {};
         this._settingsNote = null;
         this._render();
       });
 
-    const saveSettings = root.getElementById("savesettings");
-    if (saveSettings) saveSettings.addEventListener("click", () => this._saveSettings());
-
-    const resetSettings = root.getElementById("resetsettings");
-    if (resetSettings)
-      resetSettings.addEventListener("click", () => {
-        this._settingsEdits = {};
-        this._settingsNote = null;
-        this._render();
-      });
+    this._bindSettingsBar();
 
     const toggleLog = root.getElementById("togglelog");
     if (toggleLog)
@@ -4638,13 +4977,93 @@ const STYLES = `
     color: var(--primary-text-color);
     background: color-mix(in srgb, var(--warning-color, #ff9800) 18%, transparent);
     border:1px solid var(--warning-color, #ff9800); }
-  .settings-form { display:grid; gap:14px; padding:4px 0 12px; max-width:520px; }
-  .setting { display:grid; gap:4px; }
-  .setting label { font-size:13px; color: var(--secondary-text-color); }
-  .setting input[type=text], .setting input[type=number], .setting select {
-    padding:6px 8px; border-radius:6px; border:1px solid var(--divider-color);
-    background: var(--card-background-color); color: var(--primary-text-color); }
-  .setting input[type=checkbox] { width:18px; height:18px; }
+  /* Recorder settings: sections down the side, the page beside them, its
+     fields in cards of labelled rows — the words on the left, the control on
+     the right, as Home Assistant's own settings are laid out. */
+  .cfg { display:grid; grid-template-columns: 220px minmax(0, 1fr); gap:20px; align-items:start; }
+  .cfg-nav { position:sticky; top:16px; display:flex; flex-direction:column; gap:14px; }
+  .cfg-group { display:flex; flex-direction:column; gap:2px; }
+  .cfg-group-title { font-size:11px; font-weight:600; letter-spacing:.06em;
+    text-transform:uppercase; color: var(--secondary-text-color); padding:0 10px 4px; }
+  .cfg-link { text-align:left; background:none; border:0; border-radius:8px; padding:8px 10px;
+    font:inherit; font-size:14px; color: var(--primary-text-color); cursor:pointer; }
+  .cfg-link:hover { background: var(--secondary-background-color); }
+  .cfg-link.active { background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+    color: var(--primary-color); font-weight:500; }
+  .cfg-picker { display:none; }
+  .cfg-page { min-width:0; max-width:760px; }
+  .cfg-head h2 { margin:0 0 4px; font-size:22px; font-weight:400; }
+  .cfg-head p { margin:0 0 16px; color: var(--secondary-text-color); font-size:14px; line-height:1.45; }
+  .cfg-channel { display:flex; align-items:center; gap:10px; margin:0 0 14px; }
+  .cfg-channel label { font-size:14px; color: var(--secondary-text-color); }
+  .cfg-cards { display:flex; flex-direction:column; gap:16px; }
+  .cfg-card { background: var(--card-background-color); border-radius:12px; overflow:hidden;
+    box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.08));
+    border:1px solid var(--divider-color); }
+  .cfg-card h3 { margin:0; padding:14px 16px 6px; font-size:15px; font-weight:500; }
+  .cfg-row { display:flex; align-items:center; justify-content:space-between; gap:16px;
+    min-height:52px; padding:8px 16px; border-top:1px solid var(--divider-color);
+    position:relative; }
+  .cfg-card h3 + .cfg-row { border-top:0; }
+  .cfg-row label { display:flex; flex-direction:column; gap:2px; min-width:0; font-size:14px;
+    cursor:pointer; }
+  .cfg-row small { font-size:12px; color: var(--secondary-text-color); }
+  .cfg-row .cfg-rejected { color: var(--error-color, #f44336); }
+  /* An edit not yet saved is marked down the row's edge, so a long page shows at
+     a glance what Save is about to send. */
+  .cfg-row.changed::before { content:""; position:absolute; left:0; top:8px; bottom:8px;
+    width:3px; border-radius:0 3px 3px 0; background: var(--primary-color); }
+  .cfg-row.rejected::before { content:""; position:absolute; left:0; top:8px; bottom:8px;
+    width:3px; border-radius:0 3px 3px 0; background: var(--error-color, #f44336); }
+  .cfg-row.off label { opacity:.5; }
+  .cfg-control { flex:none; display:flex; align-items:center; justify-content:flex-end;
+    max-width:60%; }
+  .cfg-control select, .cfg-control input[type=text], .cfg-control input[type=number] {
+    font:inherit; font-size:14px; padding:7px 10px; border-radius:8px;
+    border:1px solid var(--divider-color); background: var(--secondary-background-color);
+    color: var(--primary-text-color); min-width:0; }
+  .cfg-control select { max-width:100%; cursor:pointer; }
+  .cfg-control input[type=text] { width:240px; max-width:100%; }
+  .cfg-control :disabled { opacity:.5; cursor:not-allowed; }
+  .cfg-number { display:inline-flex; align-items:center; gap:8px; }
+  .cfg-number input { width:90px; text-align:right; }
+  .cfg-unit { font-size:13px; color: var(--secondary-text-color); min-width:2.5em; }
+  .cfg-level { display:inline-flex; align-items:center; gap:12px; }
+  .cfg-level input { width:180px; accent-color: var(--primary-color); cursor:pointer; }
+  .cfg-level output { min-width:6.5em; font-size:13px; color: var(--secondary-text-color); }
+  /* A switch rather than a checkbox: on and off, the way Home Assistant asks. */
+  .switch { position:relative; display:inline-flex; width:40px; height:22px; flex:none; }
+  .switch input { position:absolute; inset:0; margin:0; opacity:0; cursor:pointer; z-index:1; }
+  .switch-track { position:absolute; inset:0; border-radius:11px;
+    background: var(--disabled-color, #bdbdbd); transition: background .15s ease; }
+  .switch-track::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px;
+    border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3);
+    transition: transform .15s ease; }
+  .switch input:checked + .switch-track { background: var(--primary-color); }
+  .switch input:checked + .switch-track::after { transform: translateX(18px); }
+  .switch input:focus-visible + .switch-track { outline:2px solid var(--primary-color); outline-offset:2px; }
+  .switch input:disabled + .switch-track { opacity:.45; }
+  /* The bar stays at the foot of the screen while the page scrolls, so Save is
+     never a scroll away from the field just changed. */
+  .cfg-bar { position:sticky; bottom:0; z-index:4; display:flex; align-items:center; gap:10px;
+    margin-top:16px; padding:12px 16px; border-radius:12px;
+    background: var(--card-background-color); border:1px solid var(--divider-color);
+    box-shadow:0 -2px 10px rgba(0,0,0,.12); }
+  .cfg-bar.dirty { border-color: var(--primary-color); }
+  .cfg-status { flex:1; font-size:13px; color: var(--secondary-text-color); }
+  .cfg-bar button { padding:8px 16px; font-size:14px; }
+  @media (max-width: 870px) {
+    .cfg { grid-template-columns: 1fr; gap:12px; }
+    .cfg-nav { display:none; }
+    .cfg-picker { display:block; width:100%; margin-bottom:14px; font:inherit; font-size:15px;
+      padding:10px 12px; border-radius:10px; border:1px solid var(--divider-color);
+      background: var(--card-background-color); color: var(--primary-text-color); }
+  }
+  @media (max-width: 600px) {
+    .cfg-row { flex-wrap:wrap; }
+    .cfg-control { max-width:100%; }
+    .cfg-level input { width:140px; }
+  }
   .viewer-body { padding:12px 14px; }
   .report { max-height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-word;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:12px;

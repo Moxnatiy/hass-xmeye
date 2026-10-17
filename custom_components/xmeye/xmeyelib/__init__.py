@@ -10,7 +10,7 @@
     asyncio.run(main())
 """
 
-from .client import XmeyeClient
+from .client import XmeyeClient, needs_restart
 from .const import DEFAULT_PORT, Msg, PtzCommand, Ret, StreamType
 from .exceptions import (
     CommandFailed,
@@ -50,6 +50,7 @@ from .stream import ArchiveStream, LiveStream, TalkStream
 __version__ = "0.1.0"
 
 __all__ = [
+    "needs_restart",
     "TalkStream",
     "demux",
     "decode_timestamp",
