@@ -30,6 +30,13 @@ i18nModule.then((module) => {
   useLanguage = module.useLanguage;
 });
 
+//: The record schedule's grid arithmetic. Pure functions, in a module of
+//: their own so the tests can run them; see schedule.js.
+let Schedule = null;
+import(`./schedule.js${VERSION ? `?v=${VERSION}` : ""}`).then((module) => {
+  Schedule = module;
+});
+
 let NativePlayer = null;
 let nativeSupported = typeof VideoDecoder !== "undefined";
 //: The volume control's curve; see native-player.js. A plain line until the
@@ -220,6 +227,11 @@ const soundIcon = (on) =>
         : '<path d="M10.8 6.2l3.6 3.6"/><path d="M14.4 6.2l-3.6 3.6"/>')
   );
 
+//: Copy: two sheets, one over the other.
+const copyIcon = () =>
+  mark('<rect x="5.4" y="5.4" width="8.2" height="8.2" rx="1.6"/>' +
+       '<path d="M10.6 3.4V3.6a1.2 1.2 0 0 0-1.2-1.2H3.6a1.2 1.2 0 0 0-1.2 1.2v5.8a1.2 1.2 0 0 0 1.2 1.2h.2"/>');
+
 //: Presets: a bookmark, the mark for "a place kept to come back to".
 const presetIcon = () => mark('<path d="M4.4 2.2h7.2v11.6L8 10.9l-3.6 2.9z"/>');
 
@@ -333,7 +345,47 @@ const TIME_ZONES = [
 //: The hours of a day as select options, for "at what hour".
 const HOURS = Array.from({ length: 24 }, (_, h) => [h, `${String(h).padStart(2, "0")}:00`]);
 
+//: Paint brushes for the record schedule: what a slot records, by mask.
+const RECORD_BRUSHES = [
+  { mask: 7, label: "Continuous", kind: "always" },
+  { mask: 2, label: "Motion", kind: "motion" },
+  { mask: 4, label: "Alarm input", kind: "alarm" },
+  { mask: 6, label: "Motion or alarm", kind: "event" },
+  { mask: 0, label: "Nothing", kind: "none" },
+];
+
 const SETTINGS_TREE = [
+  {
+    id: "recording",
+    title: "Recording",
+    pages: [
+      {
+        id: "record",
+        title: "Schedule",
+        section: "Record",
+        perChannel: true,
+        // The week lives in these two, edited by the grid rather than as fields.
+        extraKeys: ["TimeSection", "Mask"],
+        hint: "When each camera records, and what makes it record. Paint the week with the kind you pick; a day holds at most six periods.",
+        cards: [
+          {
+            title: "Recording",
+            fields: [
+              { key: "RecordMode", label: "Record", type: "select",
+                options: [["ConfigRecord", "On the schedule below"], ["ManualRecord", "All the time"],
+                          ["ClosedRecord", "Never"]] },
+              { key: "PreRecord", label: "Pre-record", type: "number", min: 0, max: 30, unit: "s",
+                hint: "Kept from before motion or an alarm starts" },
+              { key: "PacketLength", label: "File length", type: "number", min: 1, max: 120, unit: "min" },
+              { key: "Redundancy", label: "Also write to the redundant disk", type: "toggle",
+                hint: "Only matters with a disk set as redundant" },
+            ],
+          },
+          { title: "Week", schedule: true },
+        ],
+      },
+    ],
+  },
   {
     id: "system",
     title: "System",
@@ -964,6 +1016,13 @@ class XmeyePanel extends HTMLElement {
     this._settingsEdits = {};
     //: Fields whose last save the recorder did not take, by key.
     this._settingsRejected = {};
+    //: The record schedule being painted, and the kind of recording painted.
+    this._sched = null;
+    this._schedBrush = 7;
+    //: Cameras a per-camera page is also written to on Save, and whether the
+    //: list of them is open.
+    this._settingsCopyTo = new Set();
+    this._settingsCopyOpen = false;
     //: Which channel a per-channel section is showing.
     this._settingsChannel = 0;
     this._settingsSaving = false;
@@ -3761,7 +3820,10 @@ class XmeyePanel extends HTMLElement {
       </select>`;
 
     let body;
-    if (!this._settings || this._settings.section !== page.section) {
+    // Still reading counts as not read: drawn from an empty value, the form
+    // showed defaults for a moment, and the schedule kept the empty week it
+    // was first built from.
+    if (!this._settings || this._settings.section !== page.section || this._settings.loading) {
       body = `<div class="empty">${t("Reading the settings…")}</div>`;
     } else if (this._settings.error) {
       body = `<div class="empty error">${escapeHtml(this._settings.error)}</div>`;
@@ -3772,7 +3834,11 @@ class XmeyePanel extends HTMLElement {
           (card) => `
             <section class="cfg-card">
               ${card.title ? `<h3>${t(card.title)}</h3>` : ""}
-              ${card.fields.map((field) => this._settingRow(page, field, value)).join("")}
+              ${
+                card.schedule
+                  ? this._scheduleBody(value)
+                  : card.fields.map((field) => this._settingRow(page, field, value)).join("")
+              }
             </section>`
         )
         .join("");
@@ -3837,7 +3903,7 @@ class XmeyePanel extends HTMLElement {
   /** Whether a field is greyed out because the toggle it depends on is off. */
   _settingDisabled(page, field, value) {
     if (!field.when) return false;
-    const master = page.cards.flatMap((c) => c.fields).find((f) => f.key === field.when);
+    const master = page.cards.flatMap((c) => c.fields || []).find((f) => f.key === field.when);
     const on = master ? this._settingCurrent(master, value) : true;
     return master && master.type === "toggle01" ? Number(on) !== 1 : on !== true;
   }
@@ -3953,13 +4019,15 @@ class XmeyePanel extends HTMLElement {
         this._settingsEdits = {};
         this._settingsRejected = {};
         this._settingsNote = null;
+        this._sched = null;
+        this._settingsCopyTo.clear();
         this._render();
       });
   }
 
   /** Every field of the open page. */
   _settingFields() {
-    return this._settingsPage().cards.flatMap((card) => card.fields);
+    return this._settingsPage().cards.flatMap((card) => card.fields || []);
   }
 
   /**
@@ -3968,18 +4036,27 @@ class XmeyePanel extends HTMLElement {
    * It says what is pending, and after a save what the recorder made of it.
    */
   _settingsBar() {
-    const dirty = Object.keys(this._settingsEdits).length;
+    const copies = this._settingsCopyTo.size;
+    const dirty = Object.keys(this._settingsEdits).length + (copies ? 1 : 0);
+    const blocked = Boolean(this._sched && this._sched.invalid.size);
     const saving = this._settingsSaving;
     const status = saving
       ? t("Saving…")
-      : dirty
-        ? t("{count} unsaved changes", { count: dirty })
-        : this._settingsNote || t("No changes");
+      : blocked
+        ? t("A day can hold at most six periods")
+        : dirty
+          ? [
+              Object.keys(this._settingsEdits).length
+                ? t("{count} unsaved changes", { count: Object.keys(this._settingsEdits).length })
+                : "",
+              copies ? t("will be copied to {count} cameras", { count: copies }) : "",
+            ].filter(Boolean).join(" · ")
+          : this._settingsNote || t("No changes");
     return `
       <div class="cfg-bar ${dirty ? "dirty" : ""}">
         <span class="cfg-status" id="settingsstatus">${escapeHtml(status)}</span>
-        <button class="ghost" id="resetsettings" ${dirty && !saving ? "" : "disabled"}>${t("Discard")}</button>
-        <button class="primary" id="savesettings" ${dirty && !saving ? "" : "disabled"}>${t("Save")}</button>
+        <button class="ghost" id="resetsettings" ${(dirty || blocked) && !saving ? "" : "disabled"}>${t("Discard")}</button>
+        <button class="primary" id="savesettings" ${dirty && !saving && !blocked ? "" : "disabled"}>${t("Save")}</button>
       </div>`;
   }
 
@@ -4005,6 +4082,296 @@ class XmeyePanel extends HTMLElement {
     }
   }
 
+  /**
+   * The week of one camera, as half-hour slots the viewer paints.
+   *
+   * The slots live in memory while the page is open, so a stroke repaints
+   * cells rather than the page; they turn back into the firmware's periods
+   * when a stroke ends. Only the days painted are rebuilt — a day set to the
+   * minute in the recorder's own menu is written back exactly as it was read.
+   */
+  _scheduleBody(value) {
+    if (!Schedule) return `<div class="empty">${t("Reading the settings…")}</div>`;
+    const state = this._scheduleState(value);
+    const mode = this._settingCurrent({ key: "RecordMode" }, value);
+    const off = mode !== "ConfigRecord";
+    const locale = (this._hass && this._hass.locale && this._hass.locale.language) || undefined;
+    // Monday first, as a week is read here; the firmware counts from Sunday.
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const dayName = (day) =>
+      new Date(2026, 0, 4 + day).toLocaleDateString(locale, { weekday: "short" });
+    const brushes = RECORD_BRUSHES.map(
+      (b) => `
+        <button class="sched-brush ${b.mask === this._schedBrush ? "active" : ""}" data-brush="${b.mask}"
+                ${off ? "disabled" : ""}>
+          <i class="k-${b.kind}"></i>${t(b.label)}
+        </button>`
+    ).join("");
+    const hours = [0, 3, 6, 9, 12, 15, 18, 21, 24]
+      .map((h) => `<span style="left:${(h / 24) * 100}%">${String(h).padStart(2, "0")}</span>`)
+      .join("");
+    const rows = order
+      .map((day) => {
+        const slots = state.slots[day];
+        const cells = slots
+          .map((mask, slot) => `<i class="k-${Schedule.maskKind(mask)}" data-slot="${slot}"></i>`)
+          .join("");
+        const tooMany = state.invalid.has(day);
+        return `
+          <div class="sched-row ${tooMany ? "too-many" : ""}" data-day="${day}">
+            <span class="sched-day">${escapeHtml(dayName(day))}</span>
+            <div class="sched-cells">${cells}</div>
+            <button class="ghost icon sched-copy" data-copyday="${day}" ${off ? "disabled" : ""}
+                    title="${t("Copy this day to every day")}"
+                    aria-label="${t("Copy this day to every day")}">${copyIcon()}</button>
+          </div>`;
+      })
+      .join("");
+    const notes = [
+      off ? t("The schedule is used only when Record is set to the schedule.") : "",
+      state.invalid.size ? t("A day can hold at most six periods; simplify the marked days.") : "",
+      state.rounded ? t("Some periods do not start on a half hour; they are shown rounded and kept exactly as they are unless their day is painted.") : "",
+    ].filter(Boolean);
+    return `
+      <div class="sched ${off ? "off" : ""}">
+        <div class="sched-brushes" role="radiogroup" aria-label="${t("Paint with")}">${brushes}</div>
+        <div class="sched-grid">
+          <div class="sched-hours"><span class="sched-day"></span><div>${hours}</div><span class="sched-pad"></span></div>
+          ${rows}
+        </div>
+        <div class="sched-actions">
+          <button class="ghost" id="schedfill" ${off ? "disabled" : ""}>${t("Fill the whole week")}</button>
+          <button class="ghost" id="schedclear" ${off ? "disabled" : ""}>${t("Clear the week")}</button>
+        </div>
+        ${notes.map((note) => `<p class="hint sched-note">${note}</p>`).join("")}
+      </div>`;
+  }
+
+  /** The slots being painted, built from what the recorder holds on first use. */
+  _scheduleState(value) {
+    const channel = this._settingsChannel;
+    if (this._sched && this._sched.channel === channel && this._sched.section === "Record") {
+      return this._sched;
+    }
+    const periods = this._settingCurrent({ key: "TimeSection" }, value) || [];
+    const masks = this._settingCurrent({ key: "Mask" }, value) || [];
+    const slots = [];
+    let rounded = false;
+    for (let day = 0; day < Schedule.DAYS; day++) {
+      const p = periods[day] || [];
+      const m = masks[day] || [];
+      slots.push(Schedule.dayToSlots(p, m));
+      if (!Schedule.dayIsAligned(p, m)) rounded = true;
+    }
+    this._sched = {
+      channel,
+      section: "Record",
+      slots,
+      painted: new Set(),
+      invalid: new Set(),
+      rounded,
+    };
+    return this._sched;
+  }
+
+  /**
+   * Turn the painted days back into periods and record them as edits.
+   *
+   * A day that needs more than six periods cannot be written; it is marked,
+   * and the save waits until it has been simplified.
+   */
+  _scheduleCommit() {
+    const state = this._sched;
+    if (!state) return;
+    const value = this._settingsValue(this._settingsPage());
+    const stored = { periods: this._settingRead(value, "TimeSection") || [],
+                     masks: this._settingRead(value, "Mask") || [] };
+    const periods = (this._settingCurrent({ key: "TimeSection" }, value) || stored.periods).map((d) => [...d]);
+    const masks = (this._settingCurrent({ key: "Mask" }, value) || stored.masks).map((d) => [...d]);
+    state.invalid.clear();
+    for (const day of state.painted) {
+      const encoded = Schedule.slotsToDay(state.slots[day]);
+      if (!encoded) {
+        state.invalid.add(day);
+        continue;
+      }
+      periods[day] = encoded.periods;
+      masks[day] = encoded.masks;
+    }
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if (same(periods, stored.periods)) delete this._settingsEdits.TimeSection;
+    else this._settingsEdits.TimeSection = periods;
+    if (same(masks, stored.masks)) delete this._settingsEdits.Mask;
+    else this._settingsEdits.Mask = masks;
+    this.shadowRoot.querySelectorAll(".sched-row").forEach((row) =>
+      row.classList.toggle("too-many", state.invalid.has(Number(row.dataset.day)))
+    );
+    this._refreshSettingsToolbar();
+  }
+
+  /** Painting, brushes and the day and week buttons of the schedule card. */
+  _bindSchedule() {
+    const root = this.shadowRoot;
+    const grid = root.querySelector(".sched-grid");
+    if (!grid || !this._sched || root.querySelector(".sched.off")) return;
+    const state = this._sched;
+
+    root.querySelectorAll("[data-brush]").forEach((button) =>
+      button.addEventListener("click", () => {
+        this._schedBrush = Number(button.dataset.brush);
+        root.querySelectorAll("[data-brush]").forEach((b) =>
+          b.classList.toggle("active", b === button)
+        );
+      })
+    );
+
+    // A stroke follows the pointer across cells. The grid holds the capture, so
+    // the cell under the pointer is found by position rather than by the event
+    // target, which stays the grid for the whole stroke.
+    let painting = false;
+    let last = null;
+    const paintSlot = (row, day, slot) => {
+      if (state.slots[day][slot] === this._schedBrush) return;
+      state.slots[day][slot] = this._schedBrush;
+      state.painted.add(day);
+      const cell = row.querySelector(`[data-slot="${slot}"]`);
+      if (cell) cell.className = `k-${Schedule.maskKind(this._schedBrush)}`;
+    };
+    const paintAt = (x, y) => {
+      const cell = root.elementFromPoint(x, y);
+      if (!cell || cell.dataset.slot === undefined) return;
+      const row = cell.closest("[data-day]");
+      if (!row) return;
+      const day = Number(row.dataset.day);
+      const slot = Number(cell.dataset.slot);
+      // Pointer events come far apart when the hand moves fast — a quick drag
+      // across a day lands on a handful of cells. Along one day the stroke
+      // fills everything between the last cell and this one.
+      const from = last && last.day === day ? last.slot : slot;
+      for (let s = Math.min(from, slot); s <= Math.max(from, slot); s++) paintSlot(row, day, s);
+      last = { day, slot };
+    };
+    grid.addEventListener("pointerdown", (event) => {
+      if (event.target.dataset.slot === undefined || event.button !== 0) return;
+      event.preventDefault();
+      painting = true;
+      last = null;
+      grid.setPointerCapture(event.pointerId);
+      paintAt(event.clientX, event.clientY);
+    });
+    grid.addEventListener("pointermove", (event) => {
+      if (painting) paintAt(event.clientX, event.clientY);
+    });
+    const finish = () => {
+      if (!painting) return;
+      painting = false;
+      this._scheduleCommit();
+    };
+    grid.addEventListener("pointerup", finish);
+    grid.addEventListener("pointercancel", finish);
+    grid.addEventListener("lostpointercapture", finish);
+
+    const repaintAll = (fill) => {
+      for (let day = 0; day < Schedule.DAYS; day++) {
+        state.slots[day] = fill(day);
+        state.painted.add(day);
+      }
+      this._scheduleCommit();
+      this._render();
+    };
+    root.querySelectorAll("[data-copyday]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const source = state.slots[Number(button.dataset.copyday)];
+        repaintAll(() => [...source]);
+      })
+    );
+    const fill = root.getElementById("schedfill");
+    if (fill)
+      fill.addEventListener("click", () =>
+        repaintAll(() => new Array(Schedule.SLOTS).fill(this._schedBrush))
+      );
+    const clear = root.getElementById("schedclear");
+    if (clear)
+      clear.addEventListener("click", () => repaintAll(() => new Array(Schedule.SLOTS).fill(0)));
+  }
+
+  /**
+   * The cameras a per-camera page's values will also be written to.
+   *
+   * Setting up sixteen cameras one by one is the chore this saves: whatever the
+   * open camera has — edited or not — goes to the ones ticked here, on Save.
+   */
+  _settingsCopyPanel() {
+    if (!this._settingsCopyOpen) return "";
+    const channels = ((this._detail && this._detail.channels) || []).filter(
+      (c) => c.index !== this._settingsChannel
+    );
+    const ticked = this._settingsCopyTo;
+    const boxes = channels
+      .map(
+        (c) => `
+          <label class="cfg-copy-item">
+            <input type="checkbox" data-copyto="${c.index}" ${ticked.has(c.index) ? "checked" : ""}>
+            ${c.index + 1}. ${escapeHtml(c.name || "")}
+          </label>`
+      )
+      .join("");
+    return `
+      <div class="cfg-copy">
+        <div class="cfg-copy-head">
+          <span>${t("Also write this camera's settings to:")}</span>
+          <button class="ghost" id="copyall">${t("All")}</button>
+          <button class="ghost" id="copynone">${t("None")}</button>
+        </div>
+        <div class="cfg-copy-list">${boxes || `<span class="hint">${t("No other cameras")}</span>`}</div>
+      </div>`;
+  }
+
+  _bindCopyPanel() {
+    const root = this.shadowRoot;
+    const toggle = root.getElementById("copytoggle");
+    if (toggle)
+      toggle.addEventListener("click", () => {
+        this._settingsCopyOpen = !this._settingsCopyOpen;
+        this._render();
+      });
+    const sync = () => {
+      root.querySelectorAll("[data-copyto]").forEach((box) => {
+        box.checked = this._settingsCopyTo.has(Number(box.dataset.copyto));
+      });
+      const label = root.getElementById("copytoggle");
+      if (label) label.textContent = this._copyToggleLabel();
+      this._refreshSettingsToolbar();
+    };
+    root.querySelectorAll("[data-copyto]").forEach((box) =>
+      box.addEventListener("change", () => {
+        const index = Number(box.dataset.copyto);
+        if (box.checked) this._settingsCopyTo.add(index);
+        else this._settingsCopyTo.delete(index);
+        sync();
+      })
+    );
+    const all = root.getElementById("copyall");
+    if (all)
+      all.addEventListener("click", () => {
+        root.querySelectorAll("[data-copyto]").forEach((box) =>
+          this._settingsCopyTo.add(Number(box.dataset.copyto))
+        );
+        sync();
+      });
+    const none = root.getElementById("copynone");
+    if (none)
+      none.addEventListener("click", () => {
+        this._settingsCopyTo.clear();
+        sync();
+      });
+  }
+
+  _copyToggleLabel() {
+    const count = this._settingsCopyTo.size;
+    return count ? t("Copy to {count} cameras", { count }) : t("Copy to other cameras…");
+  }
+
   /** Channel selector for the sections that hold one entry per channel. */
   _settingsChannelPicker() {
     const channels = (this._detail && this._detail.channels) || [];
@@ -4020,12 +4387,15 @@ class XmeyePanel extends HTMLElement {
       <div class="cfg-channel">
         <label for="setchannel">${t("Camera")}</label>
         <select id="setchannel">${options}</select>
-      </div>`;
+        <button class="ghost ${this._settingsCopyTo.size ? "active" : ""}" id="copytoggle"
+                aria-expanded="${this._settingsCopyOpen ? "true" : "false"}">${this._copyToggleLabel()}</button>
+      </div>
+      ${this._settingsCopyPanel()}`;
   }
 
   /** Leave the page's edits behind, after asking if there are any. */
   _settingsMayLeave() {
-    const dirty = Object.keys(this._settingsEdits).length;
+    const dirty = Object.keys(this._settingsEdits).length + (this._settingsCopyTo.size ? 1 : 0);
     return !dirty || window.confirm(t("Discard {count} unsaved changes?", { count: dirty }));
   }
 
@@ -4035,6 +4405,9 @@ class XmeyePanel extends HTMLElement {
     this._settingsEdits = {};
     this._settingsRejected = {};
     this._settingsNote = null;
+    this._sched = null;
+    this._settingsCopyTo.clear();
+    this._settingsCopyOpen = false;
     this._render();
     try {
       const reply = await this._ws({
@@ -4068,6 +4441,19 @@ class XmeyePanel extends HTMLElement {
       for (const [path, value] of Object.entries(edits)) {
         this._settingWrite(merged[this._settingsChannel], path, value);
       }
+      // The cameras ticked for copying get every value of the page as the open
+      // camera has it now — not only the edits, or a camera copied to would
+      // keep whatever of its own the open one had not changed.
+      const source = merged[this._settingsChannel];
+      const keys = [...this._settingFields().map((f) => f.key), ...(page.extraKeys || [])];
+      for (const index of this._settingsCopyTo) {
+        if (!merged[index]) continue;
+        merged[index] = { ...merged[index] };
+        for (const key of keys) {
+          const v = this._settingRead(source, key);
+          if (v !== undefined) this._settingWrite(merged[index], key, JSON.parse(JSON.stringify(v)));
+        }
+      }
     } else {
       merged = { ...this._settings.value };
       for (const [path, value] of Object.entries(edits)) {
@@ -4081,8 +4467,12 @@ class XmeyePanel extends HTMLElement {
         section: page.section,
         value: merged,
       });
+      const copied = this._settingsCopyTo.size;
       this._settingsEdits = {};
       this._settingsRejected = {};
+      this._sched = null;
+      this._settingsCopyTo.clear();
+      this._settingsCopyOpen = false;
       if (reply.restart) {
         // Taken, for after a restart: until then the recorder reads back the
         // old value, so what was written is what the form keeps showing.
@@ -4102,7 +4492,9 @@ class XmeyePanel extends HTMLElement {
         const kept = Object.keys(this._settingsRejected).length;
         this._settingsNote = kept
           ? t("Saved, but the recorder kept its own value for {count}", { count: kept })
-          : t("Saved");
+          : copied
+            ? t("Saved, and copied to {count} cameras", { count: copied })
+            : t("Saved");
       }
     } catch (err) {
       this._settingsNote = t("Could not save: {error}", { error: err.message || err });
@@ -4678,6 +5070,12 @@ class XmeyePanel extends HTMLElement {
         if (String(stored) === String(value)) delete this._settingsEdits[field.key];
         else this._settingsEdits[field.key] = value;
         delete this._settingsRejected[field.key];
+        // The schedule is greyed out or brought back by the record mode, which
+        // takes a redraw; the painted slots live outside the page and survive it.
+        if (field.key === "RecordMode") {
+          this._render();
+          return;
+        }
         // Only the bar and the dependent rows change, so the form is left alone
         // and the field being edited keeps focus.
         this._refreshSettingsToolbar();
@@ -4697,10 +5095,14 @@ class XmeyePanel extends HTMLElement {
         this._settingsEdits = {};
         this._settingsRejected = {};
         this._settingsNote = null;
+        this._sched = null;
+        this._settingsCopyTo.clear();
         this._render();
       });
 
     this._bindSettingsBar();
+    this._bindSchedule();
+    this._bindCopyPanel();
 
     const toggleLog = root.getElementById("togglelog");
     if (toggleLog)
@@ -4981,7 +5383,10 @@ const STYLES = `
      fields in cards of labelled rows — the words on the left, the control on
      the right, as Home Assistant's own settings are laid out. */
   .cfg { display:grid; grid-template-columns: 220px minmax(0, 1fr); gap:20px; align-items:start; }
-  .cfg-nav { position:sticky; top:16px; display:flex; flex-direction:column; gap:14px; }
+  /* Held below the panel's own top bar, which is sticky too; at top:16px the
+     first links slid under it as the page scrolled. */
+  .cfg-nav { position:sticky; top:calc(var(--header-height, 56px) + 16px);
+    display:flex; flex-direction:column; gap:14px; }
   .cfg-group { display:flex; flex-direction:column; gap:2px; }
   .cfg-group-title { font-size:11px; font-weight:600; letter-spacing:.06em;
     text-transform:uppercase; color: var(--secondary-text-color); padding:0 10px 4px; }
@@ -5051,7 +5456,62 @@ const STYLES = `
     box-shadow:0 -2px 10px rgba(0,0,0,.12); }
   .cfg-bar.dirty { border-color: var(--primary-color); }
   .cfg-status { flex:1; font-size:13px; color: var(--secondary-text-color); }
+  /* The status is put together from parts, and the first may be one that
+     reads mid-sentence elsewhere ("will be copied to …"). */
+  .cfg-status::first-letter { text-transform:uppercase; }
   .cfg-bar button { padding:8px 16px; font-size:14px; }
+  .cfg-bar button:disabled { opacity:.45; cursor:default; }
+  .cfg-channel button.active { border-color: var(--primary-color); color: var(--primary-color); }
+  .cfg-copy { margin:-4px 0 14px; padding:12px 14px; border-radius:12px;
+    background: var(--card-background-color); border:1px solid var(--divider-color); }
+  .cfg-copy-head { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:8px; }
+  .cfg-copy-head span { flex:1; }
+  .cfg-copy-list { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap:4px 12px; max-height:220px; overflow:auto; }
+  .cfg-copy-item { display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; }
+
+  /* The record schedule: one row a day, 48 half hours across, coloured by what
+     is recorded. The colours are the archive timeline's, so a week here reads
+     the same as a day there. */
+  .sched { padding:4px 16px 16px; }
+  .sched.off .sched-grid { opacity:.45; pointer-events:none; }
+  .sched-brushes { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 12px; }
+  .sched-brush { display:inline-flex; align-items:center; gap:6px; font:inherit; font-size:13px;
+    padding:5px 10px; border-radius:16px; border:1px solid var(--divider-color);
+    background:none; color: var(--primary-text-color); cursor:pointer; }
+  .sched-brush i { width:12px; height:12px; border-radius:3px; display:inline-block; }
+  .sched-brush.active { border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent); }
+  .sched-brush:disabled { opacity:.5; cursor:not-allowed; }
+  .sched-grid { display:flex; flex-direction:column; gap:3px; touch-action:none; user-select:none;
+    -webkit-user-select:none; }
+  .sched-row, .sched-hours { display:grid; grid-template-columns: 38px minmax(0,1fr) 30px;
+    align-items:center; gap:8px; }
+  .sched-hours > div { position:relative; height:14px; }
+  /* Only the hour marks are placed by hand; the empty cells either side keep
+     the row on the same columns as the days under it. */
+  .sched-hours > div > span { position:absolute; transform:translateX(-50%); font-size:10px;
+    color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+  .sched-hours > div > span:first-child { transform:none; }
+  .sched-hours > div > span:last-child { transform:translateX(-100%); }
+  .sched-day { font-size:12px; color: var(--secondary-text-color); text-transform:capitalize; }
+  .sched-cells { display:grid; grid-template-columns: repeat(48, minmax(0,1fr)); height:24px;
+    border-radius:5px; overflow:hidden; background: var(--secondary-background-color);
+    cursor:crosshair; }
+  .sched-cells i { display:block; border-right:1px solid color-mix(in srgb, var(--card-background-color) 55%, transparent); }
+  .sched-cells i:nth-child(2n) { border-right-color: color-mix(in srgb, var(--card-background-color) 25%, transparent); }
+  .sched-cells i:last-child { border-right:0; }
+  .sched-row.too-many .sched-cells { outline:2px solid var(--error-color, #f44336); outline-offset:1px; }
+  .sched-copy { padding:4px; display:flex; align-items:center; justify-content:center; }
+  .k-none { background:transparent; }
+  .k-always { background: var(--info-color, #2196f3); }
+  .k-motion { background: var(--warning-color, #ff9800); }
+  .k-alarm { background: var(--error-color, #f44336); }
+  .k-event { background: repeating-linear-gradient(135deg, var(--warning-color, #ff9800) 0 4px,
+    var(--error-color, #f44336) 4px 8px); }
+  .sched-brush i.k-none { border:1px dashed var(--secondary-text-color); }
+  .sched-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .sched-note { margin:8px 0 0; font-size:12px; }
   @media (max-width: 870px) {
     .cfg { grid-template-columns: 1fr; gap:12px; }
     .cfg-nav { display:none; }
@@ -5061,7 +5521,9 @@ const STYLES = `
   }
   @media (max-width: 600px) {
     .cfg-row { flex-wrap:wrap; }
-    .cfg-control { max-width:100%; }
+    /* Wrapped under its words, a control still keeps to the right edge, where
+       the controls of the rows that did not wrap are. */
+    .cfg-control { max-width:100%; margin-left:auto; }
     .cfg-level input { width:140px; }
   }
   .viewer-body { padding:12px 14px; }

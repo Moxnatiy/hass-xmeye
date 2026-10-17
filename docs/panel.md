@@ -52,6 +52,25 @@ answers 150, 602 or 603, and a change of menu language always answers 603 — is
 reported as saved and pending, since until the restart it reads back the old
 value.
 
+**The record schedule** (Recording → Schedule) is the `Record` section: per
+camera, the record mode, pre-record (0–30 s), file length (1–120 min), and a
+week of seven days, Sunday first, of six periods each, every period a string
+such as `1 08:30:00-17:00:00` beside a mask of what to record — 1 continuously,
+2 on motion, 4 on an alarm input; the vendor's app writes 7 for "always" and 6
+for "on alarm". The panel shows the week as a grid of half-hour slots and paints
+it with the kind picked: continuous, motion, alarm input, motion or alarm, or
+nothing. A stroke fills every slot between the cells the pointer passed, since
+a quick drag delivers only a few. When a stroke ends, the painted days turn back
+into periods; a day needing more than six is marked and Save waits. A day not
+painted is written back exactly as it was read, so one set to the minute in the
+recorder's own menu is not rounded to half hours by being looked at. The grid
+arithmetic lives in `schedule.js`, a module of its own, so the tests run it.
+
+Every page with a camera selector can copy the open camera's settings to
+others: ticked cameras receive every value of the page as the open camera has
+it — not only the edits — on Save, and the rest of the array is sent back as it
+was.
+
 The NTP time zone is an index into the vendor's own list, which runs GMT+00:00
 to GMT+13:00 and then GMT−01:00 to GMT−12:00; that order was read off VMS, which
 hands the stored number straight to its list's `setCurrentIndex`. A section is sent whole because the firmware replaces what

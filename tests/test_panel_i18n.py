@@ -36,12 +36,12 @@ JOINED = re.compile(r'"(?:[^"\\]|\\.)*"(?:\s*\+\s*"(?:[^"\\]|\\.)*")*', re.S)
 #: for ``t("…")`` cannot see through the indirection.
 INDIRECT = (
     "WALL_TROUBLE", "WALL_STREAMS", "PLAYERS", "EVENT_LABELS",
-    "SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS",
+    "SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS", "RECORD_BRUSHES",
 )
 
 #: The settings schema and the field lists it shares between pages: tables of
 #: fields and options, read by ``schema_strings``.
-SCHEMA = ("SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS")
+SCHEMA = ("SETTINGS_TREE", "EVENT_REACTIONS", "NOTICE_REACTIONS", "RECORD_BRUSHES")
 
 #: Tables of ``[value, label]`` pairs, where only the label is ever shown.
 PAIRED = ("WALL_STREAMS", "PLAYERS")
@@ -110,6 +110,9 @@ def schema_strings(block: str) -> set[str]:
     translations of "OverWrite" and "115200".
     """
     found = set()
+    # The configuration keys a page edits outside its fields are names, not
+    # words; a pair of them would otherwise read as an option.
+    block = re.sub(r"extraKeys:\s*\[[^\]]*\]", "", block)
     named_text = r"(?:title|hint|label|warning|unit):\s*(" + JOINED.pattern + ")"
     for named in re.finditer(named_text, block):
         found.add("".join(PIECE.findall(named.group(1))))
